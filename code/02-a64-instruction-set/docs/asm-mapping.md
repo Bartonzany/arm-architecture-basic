@@ -202,7 +202,9 @@ bit_not(unsigned long):
 
 ---
 
-## 04_floating_point — §10 浮点
+## 04_floating_point — §10 浮点 + §10.1 8/16 位浮点（FP16/BF16/FP8）
+
+### §10 标量浮点 FP32/FP64
 
 **C++**
 
@@ -233,6 +235,64 @@ fmadd32(float, float, float):
 **对应关系**：浮点指令名以 F 开头，宽度由寄存器名决定——`s`=32 位、`d`=64 位；
 `a*b+c` 被融合为一条 `fmadd`（乘加融合）。
 
+### §10.1 FP16 半精度（FEAT_FP16, Armv8.2-A）
+
+用 `#pragma GCC target ("arch=armv8.2-a+fp16")` 局部启用半精度扩展，
+`_Float16` 类型产生**真正的半精度指令**（H 寄存器视图）。
+
+**C++**
+
+```cpp
+_Float16 fadd16(_Float16 a, _Float16 b) { return a + b; }
+_Float16 fdiv16(_Float16 a, _Float16 b) { return a / b; }
+```
+
+**本机实际汇编**
+
+```asm
+fadd16(_Float16, _Float16):
+        fadd    h0, h0, h1     ; 16 位半精度加法
+        ret
+fdiv16(_Float16, _Float16):
+        fdiv    h0, h0, h1     ; 16 位半精度除法（对应文档 FDIV H0, H1, H2）
+        ret
+```
+
+**对应关系**：`h` 寄存器 = 16 位半精度视图（对比 `s`=32 位、`d`=64 位），
+印证 §10.1 的 FP16 格式与 §6 的 B/H/S/D/Q 视图一致。
+
+### §10.1 BF16（bfloat16, FEAT_BF16）
+
+BF16 指数位同 FP32（8 位）、尾数只有 7 位，即 **FP32 的高 16 位**。
+取 float 的高 16 位即得 BF16 位模式。
+
+**C++**
+
+```cpp
+std::uint16_t fp32_to_bf16_bits(float f) {
+    std::uint32_t bits; std::memcpy(&bits, &f, 4);
+    return static_cast<std::uint16_t>(bits >> 16);   // 取高 16 位
+}
+```
+
+**本机实际汇编**
+
+```asm
+fp32_to_bf16_bits(float):
+        fmov    w0, s0          ; float 位模式搬到通用寄存器
+        lsr     w0, w0, #16     ; 右移 16 位 = 截取高 16 位（BF16）
+        ret
+```
+
+**对应关系**：印证文档"BF16 可看作 FP32 的低精度版本"——符号位 + 8 指数位 +
+高 7 尾数位正好是 FP32 的高 16 位，故与 FP32 互转极简单。
+
+### §10.1 FP8（FEAT_FP8, Armv9.2-A）
+
+E5M2（5 指数+2 尾数）与 E4M3（4 指数+3 尾数）两种格式，由 FPMR 寄存器选择。
+GCC 13 未提供 fp8 类型/intrinsic（需 GCC 14+ 与 `-march=armv9.2-a`），
+本仓库仅作文字说明，无代码验证。
+
 ---
 
 ## 05_bit_manipulation — §11 位操作
@@ -240,12 +300,11 @@ fmadd32(float, float, float):
 **C++**
 
 ```cpp
-uint32_t extract(unsigned src, unsigned pos, unsigned width) {
-    return (src >> pos) & ((1u << width) - 1u);
+uint32_t extract_ubfx(uint32_t x) {
+    return (x >> 18) & 0x7Fu;                 // 第 18 位起取 7 位
 }
-uint32_t insert(uint32_t dst, uint32_t value, unsigned pos, unsigned width) {
-    uint32_t mask = ((1u << width) - 1u) << pos;
-    return (dst & ~mask) | ((value << pos) & mask);
+uint32_t insert_bfi(uint32_t dst, uint32_t src) {
+    return (dst & ~(0x3Fu << 9)) | ((src & 0x3Fu) << 9);  // 低 6 位插入 bit9
 }
 uint32_t reverse_bits(uint32_t x) { return __rbit(x); }
 uint32_t reverse_bytes(uint32_t x) { return __rev(x); }
@@ -254,27 +313,17 @@ uint32_t reverse_bytes(uint32_t x) { return __rev(x); }
 **本机实际汇编**
 
 ```asm
-extract(unsigned int, unsigned int, unsigned int):
-        mov     w3, #0xffffffff
-        lsr     w0, w0, w1
-        lsl     w3, w3, w2
-        bic     w0, w0, w3
+extract_ubfx(unsigned int):
+        ubfx    x0, x0, #18, #7   ; 从 bit18 提取 7 位
         ret
-insert(unsigned int, unsigned int, unsigned int, unsigned int):
-        mov     w4, #0x1
-        lsl     w1, w1, w2
-        lsl     w4, w4, w3
-        sub     w4, w4, #0x1
-        eor     w1, w1, w0
-        lsl     w4, w4, w2
-        and     w4, w4, w1
-        eor     w0, w4, w0
+insert_bfi(unsigned int, unsigned int):
+        bfi     w0, w1, #9, #6    ; 把 w1 低 6 位插入 w0 的 bit9
         ret
 reverse_bits(unsigned int):
-        rbit    w0, w0
+        rbit    w0, w0            ; 位序反转
         ret
 reverse_bytes(unsigned int):
-        rev     w0, w0
+        rev     w0, w0            ; 字节反转
         ret
 ```
 
@@ -282,9 +331,14 @@ reverse_bytes(unsigned int):
 
 | C++ | 汇编 | 说明 |
 |-----|------|------|
+| `(x >> 18) & 0x7F` | `ubfx x0, x0, #18, #7` | **UBFX**：位置/宽度编码在立即数里 |
+| `(dst & ~mask) \| ((src&0x3F)<<9)` | `bfi w0, w1, #9, #6` | **BFI**：6 位字段插入 bit9（对应文档 §11 示例）|
 | `__rbit(x)` | `rbit w0, w0` | 直接对应 RBIT |
 | `__rev(x)` | `rev w0, w0` | 直接对应 REV |
-| `(src>>pos) & mask` | `lsr`+`lsl`+`bic` | ⚙ 文档 §11 用 **UBFX/BFI**，但 GCC 对**变量**宽度/位置选择了移位+BIC 组合，未合并成 UBFX/BFI；语义等价 |
+
+> ⚙ 关键：只有**位置与宽度为编译期常量**时才生成 `ubfx/bfi`
+> （它们把位置/宽度编码在指令立即数）。若用运行时变量（如
+> `(x>>pos)&((1<<w)-1)`），编译器只能降级为 `lsr+lsl+bic` 等移位组合——语义等价。
 
 ---
 
@@ -328,7 +382,7 @@ sadd16(short, short):
 
 ---
 
-## 07_conversion — §13 FMOV vs SCVTF
+## 07_conversion — §13 FMOV vs SCVTF vs FCVT 舍入
 
 **C++**
 
@@ -337,25 +391,37 @@ double bit_copy_int_to_double(uint64_t bits) {
     double d; std::memcpy(&d, &bits, sizeof d); return d;
 }
 double convert_int_to_double(int64_t x) { return (double)x; }
-uint64_t convert_double_to_int(double d) { return (uint64_t)d; }
+uint64_t convert_double_to_int(double d) { return (uint64_t)d; }   // 向零（FCVTZU）
+long convert_double_to_int_round(double d) {
+    long r; __asm__ volatile("fcvtns %0, %d1" : "=r"(r) : "w"(d)); // 向最近（FCVTNS）
+    return r;
+}
 ```
 
 **本机实际汇编**
 
 ```asm
 bit_copy_int_to_double(unsigned long):
-        fmov    d0, x0
+        fmov    d0, x0       ; 只搬位模式
         ret
 convert_int_to_double(long):
-        scvtf   d0, x0
+        scvtf   d0, x0       ; 有符号 int -> double
         ret
 convert_double_to_int(double):
-        fcvtzu  x0, d0
+        fcvtzu  x0, d0       ; double -> 无符号 int，向零舍入
+        ret
+convert_double_to_int_round(double):
+        fcvtns  x0, d0       ; double -> long，向最近舍入（ties to even）
         ret
 ```
 
-**对应关系**：`memcpy`（整块位拷贝）→ `fmov`（只搬 64 位进 D 寄存器）；
-`(double)x` → `scvtf`（真正数值转换）。这是 §13 核心：**FMOV 搬位，SCVTF/FCVT 换数值**。
+**对应关系**：`memcpy`（整块位拷贝）→ `fmov`；`(double)x` → `scvtf`；
+`(uint64_t)d` → `fcvtzu`（向零）；内联汇编 `fcvtns` → 向最近舍入。
+§13 核心：**FMOV 搬位，SCVTF/FCVT 换数值**，而 `fcvt` 的尾缀决定舍入模式。
+
+> ⚙ 舍入差异：`fcvtzu` 向零（3.7→3），`fcvtns` 向最近且 ties-to-even
+> （3.7→4、2.5→2、3.5→4）。GCC 对 `std::llrint`/`__builtin_llrint`
+> 生成 `frintx + fcvtzs` 两条，不直接生成单条 `fcvtns`，故此处用内联汇编。
 
 ---
 
@@ -430,38 +496,58 @@ store_byte_and_half(unsigned char*, unsigned short*, unsigned int):
 **C++**
 
 ```cpp
-uint64_t read_member_c(const Rec* r) { return r->c; }        // 成员偏移 8
+uint32_t load_base(const uint32_t* p) { return *p; }            // 基址寻址
+uint64_t read_member_c(const Rec* r) { return r->c; }            // 成员偏移 8
 uint32_t read_index(const uint32_t* a, uint32_t i) { return a[i]; }
 uint64_t sum_post_index(const uint32_t* a, int n) { /* for(i) s+=a[i]; */ }
+uint32_t sum_pre_index(uint32_t* p, int n) { /* for(i) s+=*++p; */ }
 ```
 
 **本机实际汇编**
 
 ```asm
+load_base(unsigned int const*):
+        ldr     w0, [x0]             ; 基址寻址：无偏移
+        ret
 read_member_c(Rec const*):
-        ldr     x0, [x0, #8]
+        ldr     x0, [x0, #8]         ; 偏移寻址
         ret
 read_index(unsigned int const*, unsigned int):
-        ldr     w0, [x0, w1, uxtw #2]
+        ldr     w0, [x0, w1, uxtw #2]  ; 基址 + 寄存器偏移
         ret
 sum_post_index(unsigned int const*, int):
-        cmp     w1, #0x0
-        b.le    .Lret0
-        mov     x2, x0
-        mov     x0, #0x0
-        add     x3, x2, w1, sxtw #2
-.Lloop:
-        ldr     w1, [x2], #4
+        ...
+        ldr     w1, [x2], #4         ; 后索引：先读，再 x2+=4
         add     x0, x0, x1
-        cmp     x2, x3
-        b.ne    .Lloop
-.Lret0:
-        ret
+        ...
+sum_pre_index(unsigned int*, int):
+        ...
+        ldr     w1, [x2, #4]!        ; 前索引：先 x2+=4，再读
+        add     w0, w0, w1
+        ...
 ```
 
-**对应关系**：成员 `r->c`（偏移 8）→ `[x0, #8]` 立即数偏移；
-`a[i]` → `[x0, w1, uxtw #2]`（i 扩展后 ×4 字节）；循环累加 → `ldr w1, [x2], #4`
-后索引，指针自增与访存合并为同一条指令。
+**对应关系**（四种寻址 + 寄存器偏移）：
+
+| C++ | 汇编 | 模式 |
+|-----|------|------|
+| `*p` | `ldr w0, [x0]` | 基址寻址（无偏移）|
+| `r->c` | `ldr x0, [x0, #8]` | 偏移寻址（立即数）|
+| `a[i]` | `ldr w0, [x0, w1, uxtw #2]` | 寄存器偏移 |
+| `s += a[i]` 循环 | `ldr w1, [x2], #4` | 后索引（先访问再自增）|
+| `s += *++p` 循环 | `ldr w1, [x2, #4]!` | 前索引（先自增再访问，`!` 写回）|
+
+**前索引 vs 后索引**：两者净效果相同（指针最终都前移 4 字节），
+唯一区别是**本次访存发生在自增前还是自增后**：
+
+| | 汇编语义 | C 等价 | 本次读到的地址 |
+|---|----------|--------|----------------|
+| 后索引 | `w1 = mem[x2]; x2 += 4` | `*p++` | 自增前的 `p[0]` |
+| 前索引 | `x2 += 4; w1 = mem[x2]` | `*++p` | 自增后的 `p[1]` |
+
+所以 `sum_post_index`（后索引）累加 `a[0],a[1],...`，`sum_pre_index`（前索引）
+累加 `p[1],p[2],...`（跳过 `p[0]`）。栈操作类比：后索引 = 出栈（先读旧 SP
+指向的栈顶再上移 SP），前索引 = 压栈（先下移 SP 再写新栈顶）。
 
 ---
 
@@ -508,30 +594,48 @@ frame_demo(unsigned long):
 
 ---
 
-## 12_fp_vector_load — §19 浮点/向量加载 + memcpy
+## 12_fp_vector_load — §19 浮点/向量寄存器加载存储
 
 **C++**
 
 ```cpp
-void copy_16_bytes(const uint8_t* s, uint8_t* d) { std::memcpy(d, s, 16); }
+double load_d(const double* p) { return *p; }                        // LDR D1,[X0]
+void store_q_at(uint8_t* base, size_t i, uint8_t v0) {
+    uint8x16_t v = vdupq_n_u8(v0); vst1q_u8(base + i, v);            // STR Q0,[X0,X1]
+}
+void ldp_pair_q_256(const uint8_t* src, uint8_t* o1, uint8_t* o2) { // LDP Q1,Q3,[X5],#256
+    __asm__ volatile("ldp q1, q3, [%0], #256\n\tstr q1, [%1]\n\tstr q3, [%2]"
+                     : "+r"(p) : "r"(o1), "r"(o2) : "q1", "q3", "memory");
+}
 void copy_32_bytes(const uint8_t* s, uint8_t* d) { std::memcpy(d, s, 32); }
 ```
 
 **本机实际汇编**
 
 ```asm
-copy_16_bytes(unsigned char const*, unsigned char*):
-        ldp     x2, x3, [x0]    ; 16 字节 = 两个 X
-        stp     x2, x3, [x1]
+load_d(double const*):
+        ldr     d0, [x0]             ; 64 位加载到浮点寄存器 D
+        ret
+store_q_at(unsigned char*, unsigned long, unsigned char):
+        dup     v0.16b, w2           ; 单字节复制成 16 字节向量
+        str     q0, [x0, x1]         ; 128 位存到 [base + i]（寄存器偏移）
+        ret
+ldp_pair_q_256(unsigned char const*, unsigned char*, unsigned char*):
+        ldp     q1, q3, [x0], #256   ; 加载一对 128 位，指针后移 256
+        str     q1, [x1]
+        str     q3, [x2]
         ret
 copy_32_bytes(unsigned char const*, unsigned char*):
-        ldp     q0, q1, [x0]    ; 32 字节 = 两个 Q（128 位向量）
+        ldp     q0, q1, [x0]         ; memcpy 32 字节 = 两个 Q
         stp     q0, q1, [x1]
         ret
 ```
 
-**对应关系**：印证 §19——`memcpy` 用宽寄存器减少迭代次数，代码里没有浮点值
-也用 `q0/q1` 向量寄存器一次搬 16 字节。
+**对应关系**：完整对应文档 §19 的三个示例——
+`LDR D1,[X0]` → `ldr d0,[x0]`；`STR Q0,[X0,X1]` → `str q0,[x0,x1]`；
+`LDP Q1,Q3,[X5],#256` → `ldp q1,q3,[x0],#256`（内联汇编精确展示）。
+补充 `memcpy` 用 `q0/q1` 宽向量寄存器一次搬 16 字节，印证"代码里没有浮点值
+也可能用到浮点寄存器"。
 
 ---
 
@@ -617,40 +721,95 @@ classify(int, int):
 
 ---
 
-## 15_conditional_select — §23 条件选择
+## 15_conditional_select — §23 条件选择家族
 
 **C++**
 
 ```cpp
-uint32_t select_val(uint32_t a) { return (a == 0) ? 6u : 7u; }
-uint32_t cond_inc(uint32_t a, uint32_t b) { if (a != 0) b = b + 1; return b; }
-int64_t  abs_val(int64_t x) { return x < 0 ? -x : x; }
+int32_t select_reg(int32_t a, int32_t b, int cond) { return cond ? a : b; }   // CSEL
+int32_t select_inc(int32_t x, int32_t y, int cond) { return cond ? x : (y+1); } // CSINC
+int32_t inc_cond(int32_t x, int cond)             { return cond ? (x+1) : x; }  // CINC
+int32_t set_cond(int cond)                        { return cond ? 1 : 0; }      // CSET
+int64_t neg_cond(int64_t x, int cond)             { return cond ? -x : x; }     // CNEG
 ```
 
 **本机实际汇编**
 
 ```asm
-select_val(unsigned int):
-        cmp     w0, #0x0
-        cset    w0, ne          ; ne 时置 1，否则 0
-        add     w0, w0, #0x6    ; 1+6=7 或 0+6=6
+select_reg(int, int, int):
+        cmp     w2, #0x0
+        csel    w0, w1, w0, eq   ; cond 真 -> a，假 -> b
         ret
-cond_inc(unsigned int, unsigned int):
-        cmp     w0, #0x0
-        cinc    w0, w1, ne      ; if(a!=0) b+1 → 一条 CINC
+select_inc(int, int, int):
+        cmp     w2, #0x0
+        csinc   w0, w0, w1, ne   ; cond 真 -> x，假 -> y+1
         ret
-abs_val(long):
-        cmp     x0, #0x0
-        cneg    x0, x0, lt      ; x<0 则取负，无分支
+inc_cond(int, int):
+        cmp     w1, #0x0
+        cinc    w0, w0, ne       ; cond 真 -> x+1，假 -> x
+        ret
+set_cond(int):
+        cmp     w0, #0x0
+        cset    w0, ne           ; cond 真 -> 1，假 -> 0
+        ret
+neg_cond(long, int):
+        cmp     w1, #0x0
+        cneg    x0, x0, ne       ; cond 真 -> -x，假 -> x
         ret
 ```
 
-**对应关系**：§23 的条件选择家族（CSEL/CSINC/CINC/CSET/CNEG）取代分支，序列更短、
-无跳转。本机为常量 6/7 选了 `cset+add`，`b+1` 用 `cinc`，绝对值用 `cneg`。
+**对应关系**：五种指令一一对应，取代分支。
+
+| 指令 | C++ | 语义 | 别名关系 |
+|------|-----|------|----------|
+| `csel` | `cond ? a : b` | 二选一 | 基本 |
+| `csinc` | `cond ? x : (y+1)` | 选择 + 加一 | — |
+| `cinc` | `cond ? (x+1) : x` | 条件自增 | `CSINC Xd,Xn,Xn` |
+| `cset` | `cond ? 1 : 0` | 条件置位 | `CSINC Xd,XZR,XZR` |
+| `cneg` | `cond ? -x : x` | 条件取负 | — |
+
+> ⚙ 为什么 `(a==0)?6:7` 不生成 `csel`：CSEL 的两个源必须是**寄存器**，
+> 6/7 是立即数常量；编译器用 `cset+add` 两条更省。CSEL 只在两个操作数
+> 已在寄存器（或含 0 可用 `WZR`）时才出现，即本节的 `select_reg`。
 
 ---
 
-## 16_function_pcs — §25/26 BL/RET 与 PCS
+## 16_conditional_fault — §24 条件故障指令
+
+**C++**
+
+```cpp
+std::uint32_t bounds_check_load(const uint32_t* a, size_t size, size_t index) {
+    if (index >= size) {
+        __builtin_trap();     // 越界 -> 断点
+    }
+    return a[index];
+}
+```
+
+**本机实际汇编**
+
+```asm
+bounds_check_load(unsigned int const*, unsigned long, unsigned long):
+        cmp     x2, x1               ; 比较 index vs size
+        b.cs    .Ltrap               ; index >= size（无符号）则跳 trap
+        ldr     w0, [x0, x2, lsl #2] ; 合法：a[index]
+        ret
+.Ltrap:
+        brk     #0x3e8               ; 断点（__builtin_trap 默认立即数 1000）
+```
+
+**对应关系**：边界检查被编译成"比较 + 条件分支 + BRK"的传统模式，印证 §24 开头
+的描述——`cmp`+`b.hs`+`brk`。
+
+> ⚙ **cflt* 指令未覆盖**：§24 后半的 FEAT_CFLT（`cflths #0, x1, x10` 等）是
+> Armv9.8-A 扩展，本工具链 GCC 13 最高 `armv9.3-a`、汇编器不识别 `cflt`，
+> 无法编译验证。其效果是省去 `b.cond` 分支，直接用一条 `cflt*` 在条件成立时
+> 同步触发异常——对比上表的 `cmp+b.cs+brk` 即为"有条件故障指令前"的形态。
+
+---
+
+## 17_function_pcs — §25/26 BL/RET 与 PCS
 
 **C++**
 
@@ -687,13 +846,18 @@ return_struct(unsigned long):
 
 ---
 
-## 17_syscall — §27 SVC
+## 18_syscall — §27 系统调用 SVC / HVC / SMC
 
 **C++**
 
 ```cpp
-register long num __asm__("x8") = 172;   // __NR_getpid
-__asm__ volatile("svc #0" : "=r"(ret) : "r"(num) : "memory", "cc");
+long sys_getpid_asm() {
+    register long num __asm__("x8") = 172;      // __NR_getpid
+    __asm__ volatile("svc #0" : "=r"(ret) : "r"(num) : "memory", "cc");
+    return ret;
+}
+void hvc_call() { __asm__ volatile("hvc #0"); } // EL0 不可用，仅展示汇编
+void smc_call() { __asm__ volatile("smc #0"); } // EL0 不可用，仅展示汇编
 ```
 
 **本机实际汇编**
@@ -703,10 +867,25 @@ sys_getpid_asm():
         mov     x8, #0xac       ; 系统调用号 172 放入 x8
         svc     #0x0            ; 陷入 EL1（触发异常进入内核）
         ret
+hvc_call():
+        hvc     #0x0            ; 面向 EL2（虚拟机监控器）
+        ret
+smc_call():
+        smc     #0x0            ; 面向 EL3（安全监控器）
+        ret
 ```
 
-**对应关系**：Linux AArch64 系统调用约定——`x8` 放调用号，`svc #0` 触发同步异常
-切到 EL1，返回值由内核写回 `x0`。印证 §27：SVC 是"受控方式切到更高特权级"。
+**对应关系**：三类系统调用指令一一对应，均触发异常切到更高特权级：
+
+| 指令 | 目标异常级别 | 用途 | EL0 可用 |
+|------|-------------|------|----------|
+| `svc` | EL1 | 应用程序调用操作系统 | ✅ |
+| `hvc` | EL2 | OS 调用虚拟机监控器 | ❌（会触发异常）|
+| `smc` | EL3 | 调用安全固件 | ❌（会触发异常）|
+
+> ⚙ HVC/SMC 在用户态（EL0）不可用，运行会崩溃，故测试只调 SVC（getpid）；
+> 其指令形式通过交叉编译反汇编观察。若在高于目标级别的级别执行（如 EL2 执行
+> SVC、EL3 执行 HVC），异常送入**当前**异常级别——异常永不降低特权。
 
 ---
 

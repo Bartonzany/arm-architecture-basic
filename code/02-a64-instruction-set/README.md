@@ -29,20 +29,21 @@
 | 01 | `01_registers.cpp` | §6 | 通用寄存器 X/W 视图（写 W 清高 32 位）；浮点/向量寄存器 B/H/S/D/Q 视图（FADD S/D、向量 `.2d` 加）|
 | 02 | `02_special_regs.cpp` | §7 | XZR 零寄存器、`ADR` 读"PC"、SP 作基址 |
 | 03 | `03_data_processing.cpp` | §9 | 算术/逻辑指令格式：立即数、移位 Operand2、MOV/MVN、AND/ORR/EOR |
-| 04 | `04_floating_point.cpp` | §10 | 浮点 FADD/FSUB/FDIV/FMA（S/D 宽度）|
+| 04 | `04_floating_point.cpp` | §10/§10.1 | 浮点 FADD/FSUB/FDIV/FMA（S/D）；FP16（FADD H/FDIV H）、BF16（FP32 高 16 位）、FP8（说明）|
 | 05 | `05_bit_manipulation.cpp` | §11 | 位操作 UBFX/BFI/RBIT/REV |
 | 06 | `06_extend_narrow.cpp` | §12 | 扩展 SXTB/SXTH/UXTH；16 位窄整数加法 |
-| 07 | `07_conversion.cpp` | §13 | `FMOV`（搬运位）vs `SCVTF`（数值转换）|
+| 07 | `07_conversion.cpp` | §13 | `FMOV`（搬运位）vs `SCVTF`（数值转换）；`FCVTZU`（向零）/`FCVTNS`（向最近）舍入 |
 | 08 | `08_neon_simd.cpp` | §14 | Advanced SIMD (NEON) 128 位向量加法 |
 | 09 | `09_load_store.cpp` | §15/16 | 访问宽度（B/H/W/X）；零扩展 vs 符号扩展（LDRSB/LDRSH）|
-| 10 | `10_addressing.cpp` | §17 | 寻址方式：偏移 / 寄存器偏移 / 后索引 |
+| 10 | `10_addressing.cpp` | §17 | 四种寻址：基址 / 偏移 / 前索引（`[xN,#imm]!`）/ 后索引（`[xN],#imm`）+ 寄存器偏移 |
 | 11 | `11_ldp_stp.cpp` | §18 | 成对访问 LDP/STP、栈帧压栈出栈 |
-| 12 | `12_fp_vector_load.cpp` | §19 | 浮点/向量寄存器加载；memcpy 用宽寄存器 |
+| 12 | `12_fp_vector_load.cpp` | §19 | 浮点/向量加载：`LDR D1,[X0]`、`STR Q0,[X0,X1]`、`LDP Q1,Q3,[X5],#256`；memcpy 用宽向量寄存器 |
 | 13 | `13_load_acquire.cpp` | §20.1 | Load-Acquire/Release（STLR/LDAR 隐式屏障）|
 | 14 | `14_branch_flags.cpp` | §21/22 | 分支 CBZ/B.cond；条件码 N/Z/C/V（CMP/TST）|
 | 15 | `15_conditional_select.cpp` | §23 | 条件选择 CSEL/CSINC/CINC/CSET/CNEG |
-| 16 | `16_function_pcs.cpp` | §25/26 | BL/RET；PCS 参数寄存器、callee-saved |
-| 17 | `17_syscall.cpp` | §27 | SVC 系统调用（`svc #0`）|
+| 16 | `16_conditional_fault.cpp` | §24 | 条件故障：传统模式（cmp + b.cond + brk 边界检查）；cflt* 指令需 armv9.8-a 未覆盖 |
+| 17 | `17_function_pcs.cpp` | §25/26 | BL/RET；PCS 参数寄存器、callee-saved |
+| 18 | `18_syscall.cpp` | §27 | 系统调用 SVC / HVC / SMC（`svc #0` / `hvc #0` / `smc #0`）|
 
 ## 三、目录结构
 
@@ -177,4 +178,6 @@ sys_getpid_asm:  mov  x8, #0xac   ; 系统调用号 getpid = 172
   超出本仓库的 armv8-a 基线范围。
 - **§20.2/20.3 LD64B/CPYx/SETx**：Armv8.7-A+ 引入的专用加速器指令，普通编译器
   与模拟器不支持。
-- **§24 条件故障 FEAT_CFLT**：Armv9.8-A 引入，当前工具链不可用。
+- **§24 条件故障 FEAT_CFLT 的 cflt* 指令**：Armv9.8-A 引入，本工具链（GCC 13
+  最高 `armv9.3-a`）及汇编器不支持该指令；其"传统模式"（cmp + b.cond + brk）
+  已在 `18_conditional_fault.cpp` 演示。

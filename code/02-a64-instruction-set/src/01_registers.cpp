@@ -15,8 +15,13 @@
 
 #include <cstdint>
 #include <arm_neon.h>
+#include "test_util.hpp"
 
-// ================= 通用寄存器：X 与 W =================
+// ============================================================================
+// 被测函数（全部 noinline，保证每条函数对应独立的可观察汇编）
+// ============================================================================
+
+// ---- 通用寄存器：X 与 W ----------------------------------------------------
 
 // 32 位加法：参数与结果都用 W 寄存器（低 32 位）
 __attribute__((noinline))
@@ -37,7 +42,7 @@ std::uint64_t write_w_clears_upper(std::uint64_t x) {
     return low;                                          // 零扩展返回
 }
 
-// ================= 浮点/向量寄存器：B/H/S/D/Q 视图 =================
+// ---- 浮点/向量寄存器：B/H/S/D/Q 视图 ---------------------------------------
 
 // 标量 S 视图：32 位单精度浮点加法
 __attribute__((noinline))
@@ -72,31 +77,42 @@ void vec_add_16b(const std::int8_t* a, const std::int8_t* b, std::int8_t* out) {
     vst1q_s8(out, vaddq_s8(va, vb));    // ADD V0.16B
 }
 
-#include <cstdio>
+// ============================================================================
+// 分组测试
+// ============================================================================
 
-int main() {
-    std::uint32_t r32 = add32(0xFFFFFFFFu, 1u);          // 32 位回绕 -> 0
-    std::uint64_t r64 = add64(0xFFFFFFFFull, 1ull);      // 64 位 -> 0x100000000
-    std::uint64_t rw  = write_w_clears_upper(0xDEADBEEFCAFEBABEull);
+static void test_general_registers() {
+    group("组1 通用寄存器 X/W");
+    CHECK_EQ(add32(0xFFFFFFFFu, 1u), 0u);                       // 32 位回绕 -> 0
+    CHECK_EQ(add64(0xFFFFFFFFull, 1ull), 0x100000000ull);       // 64 位不溢出
+    CHECK_EQ(write_w_clears_upper(0xDEADBEEFCAFEBABEull), 0xCAFEBABEull); // 只留低 32 位
+}
 
-    float  fs = fadd_s(1.5f, 2.5f);
-    double fd = fadd_d(1.5, 2.5);
+static void test_fp_vector_registers() {
+    group("组2 浮点/向量寄存器 B/H/S/D/Q");
+
+    CHECK_EQ(fadd_s(1.5f, 2.5f), 4.0f);                         // FADD S
+    CHECK_EQ(fadd_d(1.5, 2.5), 4.0);                            // FADD D
 
     double da[2] = {1.0, 2.0}, db[2] = {10.0, 20.0}, do2[2];
-    vec_fadd_2d(da, db, do2);
+    vec_fadd_2d(da, db, do2);                                   // FADD V.2D
+    CHECK_EQ(do2[0], 11.0);
+    CHECK_EQ(do2[1], 22.0);
 
     std::uint64_t ua[2] = {100, 200}, ub[2] = {1, 2}, uo[2];
-    vec_add_2d(ua, ub, uo);
+    vec_add_2d(ua, ub, uo);                                     // ADD V.2D
+    CHECK_EQ(uo[0], 101ull);
+    CHECK_EQ(uo[1], 202ull);
 
     std::int8_t sa[16], sb[16], so[16];
-    for (int i = 0; i < 16; ++i) { sa[i] = (std::int8_t)i; sb[i] = 1; }
-    vec_add_16b(sa, sb, so);
+    for (int i = 0; i < 16; ++i) { sa[i] = static_cast<std::int8_t>(i); sb[i] = 1; }
+    vec_add_16b(sa, sb, so);                                    // ADD V.16B
+    CHECK_EQ(so[0], 1);
+    CHECK_EQ(so[15], 16);
+}
 
-    std::printf("add32=%08x add64=%016llx upper=%016llx\n",
-                r32, (unsigned long long)r64, (unsigned long long)rw);
-    std::printf("fadd_s=%f fadd_d=%f vec2d=%f,%f vecadd2d=%llu,%llu vec16b[0]=%d\n",
-                (double)fs, fd, do2[0], do2[1],
-                (unsigned long long)uo[0], (unsigned long long)uo[1], (int)so[0]);
-    return (do2[0] == 11.0 && do2[1] == 22.0 && uo[0] == 101 && uo[1] == 202
-            && so[0] == 1) ? 0 : 1;
+int main() {
+    test_general_registers();
+    test_fp_vector_registers();
+    return report();
 }
