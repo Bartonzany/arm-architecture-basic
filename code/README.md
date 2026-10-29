@@ -3,14 +3,15 @@
 本目录存放《arm-architecture-basic》笔记中各文档对应的**知识点验证代码**。
 
 每个文档一个子目录，子目录**自包含**：有独立的 `src/`（C++ 源码）、
-`README.md`（框架分析 + 知识点映射）、`docs/asm-mapping.md`（C++ ↔ 汇编逐行解释）、
+`README.md`（框架分析 + 知识点映射）、`docs/`（C++ ↔ 汇编逐行解释或概念说明）、
 `CMakeLists.txt`、`Makefile` 与 `scripts/build_all.sh` 构建脚本。
 
 ## 子目录索引
 
 | 子目录 | 对应文档 | 状态 |
 |--------|----------|------|
-| [`02-a64-instruction-set/`](02-a64-instruction-set/) | 02 - A64 指令集架构指南 | ✅ 17 个 demo |
+| [`02-a64-instruction-set/`](02-a64-instruction-set/) | 02 - A64 指令集架构指南 | ✅ 18 个 demo |
+| [`03-aarch64-exception-model/`](03-aarch64-exception-model/) | 03 - AArch64 异常模型 | ✅ 2 个 demo（特权级内容为概念说明）|
 
 ## 统一约定
 
