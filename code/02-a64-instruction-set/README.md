@@ -26,7 +26,7 @@
 
 | # | 源文件 | 文档章节 | 验证机制 |
 |---|--------|----------|----------|
-| 01 | `01_registers.cpp` | §6 | X 与 W 是同一寄存器的两种视图；写 W 清零 X 高 32 位 |
+| 01 | `01_registers.cpp` | §6 | 通用寄存器 X/W 视图（写 W 清高 32 位）；浮点/向量寄存器 B/H/S/D/Q 视图（FADD S/D、向量 `.2d` 加）|
 | 02 | `02_special_regs.cpp` | §7 | XZR 零寄存器、`ADR` 读"PC"、SP 作基址 |
 | 03 | `03_data_processing.cpp` | §9 | 算术/逻辑指令格式：立即数、移位 Operand2、MOV/MVN、AND/ORR/EOR |
 | 04 | `04_floating_point.cpp` | §10 | 浮点 FADD/FSUB/FDIV/FMA（S/D 宽度）|
@@ -47,7 +47,7 @@
 ## 三、目录结构
 
 ```
-03-a64-instruction-set/
+02-a64-instruction-set/
 ├── README.md                # 本文件（框架分析 + 知识点映射 + 使用说明）
 ├── docs/
 │   └── asm-mapping.md       # C++ ↔ 汇编逐行对应解释（含优化点）

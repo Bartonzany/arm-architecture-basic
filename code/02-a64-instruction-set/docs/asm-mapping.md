@@ -25,7 +25,11 @@
 
 ---
 
-## 01_registers — §6 X 与 W 两种视图
+## 01_registers — §6 寄存器：X/W 视图 与 浮点/向量寄存器
+
+§6 讲了两类寄存器：通用寄存器（X/W 视图）与浮点/向量寄存器（B/H/S/D/Q 视图）。
+
+### 6.1 通用寄存器：X 与 W
 
 **C++**
 
@@ -58,10 +62,64 @@ write_w_clears_upper(unsigned long):
 |-----|------|------|
 | `uint32_t` 参数/返回 | `w0` | 32 位类型用 W 视图 |
 | `uint64_t` 参数/返回 | `x0` | 64 位类型用 X 视图 |
-| 截断到 `uint32_t` | `mov w0, w0` | §6 关键副作用：写 W 即清零对应 X 高 32 位，所以 64→32 位截断只需一条 `mov w0,w0`，无需额外 `and` |
+| 截断到 `uint32_t` | `mov w0, w0` | §6 关键副作用：写 W 即清零对应 X 高 32 位 |
 
 > ⚙ 置零写法：本机对 `return 0`（见 02）生成 `mov x0, #0x0`（立即数 0），
 > 而非 `mov x0, xzr`——两条都合法，取决于编译器选择。
+
+### 6.2 浮点/向量寄存器：B/H/S/D/Q 视图
+
+同类寄存器还有独立的 32 个 128 位寄存器，按宽度有多种视图：
+`B`=8 位、`H`=16 位、`S`=32 位、`D`=64 位、`Q`=128 位。
+用 `V` 形式时被当作"装着多个独立元素的向量"。
+
+**C++**
+
+```cpp
+float  fadd_s(float a, float b) { return a + b; }   // 标量 S（32 位）
+double fadd_d(double a, double b) { return a + b; } // 标量 D（64 位）
+void vec_fadd_2d(const double* a, const double* b, double* o) {
+    vst1q_f64(o, vaddq_f64(vld1q_f64(a), vld1q_f64(b)));   // 2 个 double 并行
+}
+void vec_add_2d(const uint64_t* a, const uint64_t* b, uint64_t* o) {
+    vst1q_u64(o, vaddq_u64(vld1q_u64(a), vld1q_u64(b)));   // 2 个 int64 并行
+}
+```
+
+**本机实际汇编**
+
+```asm
+fadd_s(float, float):
+        fadd    s0, s0, s1          ; S=32 位单精度
+        ret
+fadd_d(double, double):
+        fadd    d0, d0, d1          ; D=64 位双精度
+        ret
+vec_fadd_2d(double const*, double const*, double*):
+        ldr     q0, [x0]
+        ldr     q1, [x1]
+        fadd    v0.2d, v0.2d, v1.2d ; FADD V0.2D：2 个 64 位浮点并行加
+        str     q0, [x2]
+        ret
+vec_add_2d(unsigned long const*, unsigned long const*, unsigned long*):
+        ldr     q0, [x0]
+        ldr     q1, [x1]
+        add     v0.2d, v0.2d, v1.2d ; ADD V0.2D：2 个 64 位整数并行加
+        str     q0, [x2]
+        ret
+```
+
+**对应关系**
+
+| C++ | 汇编 | 说明 |
+|-----|------|------|
+| `float` 加 | `fadd s0, s0, s1` | 标量 S 视图（32 位）|
+| `double` 加 | `fadd d0, d0, d1` | 标量 D 视图（64 位）|
+| `vaddq_f64` | `fadd v0.2d` | **向量 `.2d`**：2 个 64 位元素并行，正是文档的 `FADD V0.2D` |
+| `vaddq_u64` | `add v0.2d` | **向量 `.2d`**：2 个 64 位整数并行，正是文档的 `ADD V0.2D` |
+
+> `.2d` 后缀 = 128 位寄存器按 64 位通道分成 2 个元素；同理 `.16b`（16×8bit）、
+> `.8h`（8×16bit）、`.4s`（4×32bit），见 demo 08 的 `add v0.16b`/`fadd v0.4s`。
 
 ---
 
