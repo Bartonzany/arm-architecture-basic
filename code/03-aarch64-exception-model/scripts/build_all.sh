@@ -62,11 +62,22 @@ if [[ "$fail" -ne 0 ]]; then
     exit 1
 fi
 
+# ---- 裸机示例：向量表 + 异常处理器（产物 -> build/bare-metal/）----
+BMDIR="$ROOT/src/bare-metal"
+if [[ -f "$BMDIR/Makefile" ]] && command -v make >/dev/null 2>&1; then
+    echo
+    echo "编译裸机示例（向量表 + 异常处理器）..."
+    make -C "$BMDIR" build disasm
+fi
+
 echo
 echo "产物："
 echo "  可执行文件 : $BINDIR/"
 echo "  汇编(.s)   : $ASMDIR/"
 echo "  反汇编(.txt): $DISASMDIR/"
+if [[ -d "$BUILDDIR/bare-metal" ]]; then
+    echo "  裸机示例   : $BUILDDIR/bare-metal/（kernel.elf + kernel.dis）"
+fi
 
 if [[ "$DO_RUN" -eq 1 ]]; then
     if ! command -v "$QEMU" >/dev/null 2>&1; then
@@ -78,4 +89,13 @@ if [[ "$DO_RUN" -eq 1 ]]; then
         echo "===== $(basename "$bin") ====="
         "$QEMU" "$bin" || true
     done
+
+    # 裸机示例用 qemu-system-aarch64 运行（semihosting 让程序自己退出，无需 timeout）
+    if [[ -f "$BUILDDIR/bare-metal/kernel.elf" ]] && command -v qemu-system-aarch64 >/dev/null 2>&1; then
+        echo
+        echo "===== bare-metal 向量表 + 异常处理器 ====="
+        qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 \
+            -nographic -monitor none -net none -semihosting \
+            -kernel "$BUILDDIR/bare-metal/kernel.elf" || true
+    fi
 fi
