@@ -79,6 +79,7 @@ arm-architecture-basic/
 | `08-mmu-examples` | AArch64 内存管理示例 | EL1/EL2/EL3 各阶段页表转换示例 |
 | `09-memory-attributes` | AArch64 内存属性与特性 | EL1 裸机（QEMU virt）验证 Normal/Device、MAIR、权限等 |
 | `10-memory-ordering` | 内存系统排序与屏障 | EL1 裸机验证排序与屏障 |
+| `12-neon-intrinsics` | 用 Neon 内建函数优化 C 代码 | 3 个 C++ demo（RGB 去交错 / 矩阵乘法 / 碰撞检测）+ `-O2` 交叉编译反汇编 + qemu 运行 |
 
 ## 使用方式
 
