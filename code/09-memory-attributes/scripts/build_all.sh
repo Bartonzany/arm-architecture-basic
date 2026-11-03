@@ -9,7 +9,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BM="$ROOT/src/bare-metal"
+BM="$ROOT/src"
 
 if [[ "${1:-}" == "clean" ]]; then
     make -C "$BM" clean
@@ -22,7 +22,7 @@ make -C "$BM" build disasm
 
 echo
 echo "产物："
-echo "  裸机示例 : $ROOT/build/bare-metal/（kernel.elf + kernel.dis）"
+echo "  裸机示例 : $ROOT/build/（kernel.elf + kernel.dis）"
 
 if [[ "${1:-}" == "--run" ]]; then
     echo

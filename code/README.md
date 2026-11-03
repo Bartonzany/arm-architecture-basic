@@ -16,6 +16,7 @@
 | [`05-generic-timer/`](05-generic-timer/) | 05 - Arm 通用定时器 | ✅ EL1 裸机（频率/计数/CVAL·TVAL/中断）|
 | [`08-mmu-examples/`](08-mmu-examples/) | 08b - AArch64 内存管理示例 | ✅ 10 个 MMU 初始化示例（EL1/EL2/EL3，纯汇编）|
 | [`09-memory-attributes/`](09-memory-attributes/) | 09 - AArch64 内存属性与特性 | ✅ EL1 裸机（内存类型/权限/执行权限/对齐/AF）|
+| [`10-memory-ordering/`](10-memory-ordering/) | 10 - AArch64 内存排序与屏障 | ✅ EL1 裸机（LDAR/STLR 对齐故障 + ISB 上下文同步）|
 
 ## 统一约定
 

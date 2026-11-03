@@ -5,7 +5,7 @@
 MMU 内容，故用 **EL1 裸机（QEMU virt）** 示例真实验证；仅有无法在 QEMU 建模
 的部分（Device 非对齐故障）标注为"说明"。
 
-代码位置：`src/bare-metal/`（boot.S + vector_table.S + main.c + linker.ld）。
+代码位置：`src/`（boot.S + vector_table.S + main.c + linker.ld）。
 运行方式：
 
 ```bash

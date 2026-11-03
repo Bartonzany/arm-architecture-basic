@@ -1,11 +1,11 @@
-# Makefile — AArch64 内存属性验证裸机示例（顶层，委托给 src/bare-metal/Makefile）
+# Makefile — AArch64 内存属性验证裸机示例（顶层，委托给 src/Makefile）
 #
 # 目标：
 #   make            # 编译 + 反汇编
 #   make run        # qemu-system-aarch64 运行
 #   make clean
 
-BM_DIR := src/bare-metal
+BM_DIR := src
 
 .PHONY: all run disasm clean
 

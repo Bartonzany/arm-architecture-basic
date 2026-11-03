@@ -11,7 +11,7 @@
 09-memory-attributes/
 ├── README.md                        # 本文件（入口 + 导航）
 ├── docs/memory-attributes-notes.md  # ★ 概念 + 文段/代码/结果/为什么
-├── src/bare-metal/                  # EL1 裸机示例
+├── src/                             # EL1 裸机源码
 │   ├── boot.S                       # 设栈 + VBAR_EL1 + 跳 main
 │   ├── vector_table.S               # 16 入口向量表 + 同步异常处理器
 │   ├── main.c                       # 建页表 + 开 MMU + 各验证用例 + 异常处理
@@ -47,4 +47,4 @@ make run                          # 或 make 方式
 | 想了解 | 看这里 |
 |--------|--------|
 | 概念 + 文段/代码/结果/为什么 | [`docs/memory-attributes-notes.md`](docs/memory-attributes-notes.md) |
-| 源码 | [`src/bare-metal/`](src/bare-metal/) |
+| 源码 | [`src/`](src/) |
