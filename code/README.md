@@ -15,6 +15,7 @@
 | [`04-aarch64-virtualization/`](04-aarch64-virtualization/) | 04 - AArch64 虚拟化指南 | ✅ EL2 裸机（陷阱机制）+ 概念说明 |
 | [`05-generic-timer/`](05-generic-timer/) | 05 - Arm 通用定时器 | ✅ EL1 裸机（频率/计数/CVAL·TVAL/中断）|
 | [`08-mmu-examples/`](08-mmu-examples/) | 08b - AArch64 内存管理示例 | ✅ 10 个 MMU 初始化示例（EL1/EL2/EL3，纯汇编）|
+| [`09-memory-attributes/`](09-memory-attributes/) | 09 - AArch64 内存属性与特性 | ✅ EL1 裸机（内存类型/权限/执行权限/对齐/AF）|
 
 ## 统一约定
 
