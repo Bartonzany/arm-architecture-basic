@@ -327,7 +327,262 @@ void matrix_multiply_neon(float32_t *A, float32_t *B, float32_t *C, uint32_t n, 
 
 **完整源代码示例**
 
-此示例的完整源代码略（见原文附录），其中包括 matrix_multiply_c、matrix_multiply_neon、matrix_multiply_4x4_neon，以及矩阵打印、随机初始化、比较等辅助函数。
+此示例的完整源代码（其中 `vfmaq_laneq_f32` 为原文所写，与前面用到的 `vfmaq_lane_f32` 等价）如下：
+
+```c
+/*
+ * Copyright (C) Arm Limited, 2019 All rights reserved.
+ *
+ * 在与基于 Arm 的技术（包括但不限于编程教程）打交道时，
+ * 该示例代码作为学习辅助提供给你。
+ * 在遵守本许可条款的前提下，Arm 特此授予你一项非独占、不可转让、
+ * 不可再许可、免费的许可，仅用于演示和评估目的来使用和复制本软件。
+ *
+ * 你接受本软件未经 Arm 测试，因此本软件按"原样"提供，不附带任何明示或
+ * 暗示的保证。在任何情况下，作者或版权持有人均不对因本软件或软件的使用
+ * 而产生或与之相关的任何索赔、损害或其他责任负责，无论是基于诉讼、合同、
+ * 侵权还是其他原因。
+ */
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <math.h>
+#include <arm_neon.h>
+#define BLOCK_SIZE 4
+
+void matrix_multiply_c(float32_t *A, float32_t *B, float32_t *C, uint32_t n, uint32_t m, uint32_t k) {
+        for (int i_idx=0; i_idx<n; i_idx++) {
+                for (int j_idx=0; j_idx<m; j_idx++) {
+                        C[n*j_idx + i_idx] = 0;
+                        for (int k_idx=0; k_idx<k; k_idx++) {
+                                C[n*j_idx + i_idx] += A[n*k_idx + i_idx]*B[k*j_idx + k_idx];
+                        }
+                }
+        }
+}
+
+void matrix_multiply_neon(float32_t *A, float32_t *B, float32_t *C, uint32_t n, uint32_t m, uint32_t k) {
+        /*
+         * 把矩阵 A 和 B 相乘，把结果存储到 C。
+         * 用户有责任确保矩阵兼容。
+         */
+        int A_idx;
+        int B_idx;
+        int C_idx;
+
+        // 这些是 A 的 4x4 子矩阵的列
+        float32x4_t A0;
+        float32x4_t A1;
+        float32x4_t A2;
+        float32x4_t A3;
+
+        // 这些是 B 的 4x4 子矩阵的列
+        float32x4_t B0;
+        float32x4_t B1;
+        float32x4_t B2;
+        float32x4_t B3;
+
+        // 这些是 C 的 4x4 子矩阵的列
+        float32x4_t C0;
+        float32x4_t C1;
+        float32x4_t C2;
+        float32x4_t C3;
+
+        for (int i_idx=0; i_idx<n; i_idx+=4) {
+                for (int j_idx=0; j_idx<m; j_idx+=4) {
+                        // 矩阵运算前清零累加器
+                        C0 = vmovq_n_f32(0);
+                        C1 = vmovq_n_f32(0);
+                        C2 = vmovq_n_f32(0);
+                        C3 = vmovq_n_f32(0);
+                        for (int k_idx=0; k_idx<k; k_idx+=4) {
+                                // 计算 4x4 块的基索引
+                                A_idx = i_idx + n*k_idx;
+                                B_idx = k*j_idx + k_idx;
+
+                                // 加载行中最新的 A 值
+                                A0 = vld1q_f32(A+A_idx);
+                                A1 = vld1q_f32(A+A_idx+n);
+                                A2 = vld1q_f32(A+A_idx+2*n);
+                                A3 = vld1q_f32(A+A_idx+3*n);
+
+                                // 按 4x1 块做乘加，即 C 的每一列
+                                B0 = vld1q_f32(B+B_idx);
+                                C0 = vfmaq_laneq_f32(C0, A0, B0, 0);
+                                C0 = vfmaq_laneq_f32(C0, A1, B0, 1);
+                                C0 = vfmaq_laneq_f32(C0, A2, B0, 2);
+                                C0 = vfmaq_laneq_f32(C0, A3, B0, 3);
+
+                                B1 = vld1q_f32(B+B_idx+k);
+                                C1 = vfmaq_laneq_f32(C1, A0, B1, 0);
+                                C1 = vfmaq_laneq_f32(C1, A1, B1, 1);
+                                C1 = vfmaq_laneq_f32(C1, A2, B1, 2);
+                                C1 = vfmaq_laneq_f32(C1, A3, B1, 3);
+
+                                B2 = vld1q_f32(B+B_idx+2*k);
+                                C2 = vfmaq_laneq_f32(C2, A0, B2, 0);
+                                C2 = vfmaq_laneq_f32(C2, A1, B2, 1);
+                                C2 = vfmaq_laneq_f32(C2, A2, B2, 2);
+                                C2 = vfmaq_laneq_f32(C2, A3, B2, 3);
+
+                                B3 = vld1q_f32(B+B_idx+3*k);
+                                C3 = vfmaq_laneq_f32(C3, A0, B3, 0);
+                                C3 = vfmaq_laneq_f32(C3, A1, B3, 1);
+                                C3 = vfmaq_laneq_f32(C3, A2, B3, 2);
+                                C3 = vfmaq_laneq_f32(C3, A3, B3, 3);
+                        }
+                        // 计算存储的基索引
+                        C_idx = n*j_idx + i_idx;
+                        vst1q_f32(C+C_idx, C0);
+                        vst1q_f32(C+C_idx+n, C1);
+                        vst1q_f32(C+C_idx+2*n, C2);
+                        vst1q_f32(C+C_idx+3*n, C3);
+                }
+        }
+}
+
+void matrix_multiply_4x4_neon(float32_t *A, float32_t *B, float32_t *C) {
+        // 这些是 A 的列
+        float32x4_t A0;
+        float32x4_t A1;
+        float32x4_t A2;
+        float32x4_t A3;
+
+        // 这些是 B 的列
+        float32x4_t B0;
+        float32x4_t B1;
+        float32x4_t B2;
+        float32x4_t B3;
+
+        // 这些是 C 的列
+        float32x4_t C0;
+        float32x4_t C1;
+        float32x4_t C2;
+        float32x4_t C3;
+
+        A0 = vld1q_f32(A);
+        A1 = vld1q_f32(A+4);
+        A2 = vld1q_f32(A+8);
+        A3 = vld1q_f32(A+12);
+
+        // 清零 C 值的累加器
+        C0 = vmovq_n_f32(0);
+        C1 = vmovq_n_f32(0);
+        C2 = vmovq_n_f32(0);
+        C3 = vmovq_n_f32(0);
+
+        // 按 4x1 块做乘加，即 C 的每一列
+        B0 = vld1q_f32(B);
+        C0 = vfmaq_laneq_f32(C0, A0, B0, 0);
+        C0 = vfmaq_laneq_f32(C0, A1, B0, 1);
+        C0 = vfmaq_laneq_f32(C0, A2, B0, 2);
+        C0 = vfmaq_laneq_f32(C0, A3, B0, 3);
+        vst1q_f32(C, C0);
+
+        B1 = vld1q_f32(B+4);
+        C1 = vfmaq_laneq_f32(C1, A0, B1, 0);
+        C1 = vfmaq_laneq_f32(C1, A1, B1, 1);
+        C1 = vfmaq_laneq_f32(C1, A2, B1, 2);
+        C1 = vfmaq_laneq_f32(C1, A3, B1, 3);
+        vst1q_f32(C+4, C1);
+
+        B2 = vld1q_f32(B+8);
+        C2 = vfmaq_laneq_f32(C2, A0, B2, 0);
+        C2 = vfmaq_laneq_f32(C2, A1, B2, 1);
+        C2 = vfmaq_laneq_f32(C2, A2, B2, 2);
+        C2 = vfmaq_laneq_f32(C2, A3, B2, 3);
+        vst1q_f32(C+8, C2);
+
+        B3 = vld1q_f32(B+12);
+        C3 = vfmaq_laneq_f32(C3, A0, B3, 0);
+        C3 = vfmaq_laneq_f32(C3, A1, B3, 1);
+        C3 = vfmaq_laneq_f32(C3, A2, B3, 2);
+        C3 = vfmaq_laneq_f32(C3, A3, B3, 3);
+        vst1q_f32(C+12, C3);
+}
+
+void print_matrix(float32_t *M, uint32_t cols, uint32_t rows) {
+        for (int i=0; i<rows; i++) {
+                for (int j=0; j<cols; j++) {
+                        printf("%f ", M[j*rows + i]);
+                }
+                printf("\n");
+        }
+        printf("\n");
+}
+
+void matrix_init_rand(float32_t *M, uint32_t numvals) {
+        for (int i=0; i<numvals; i++) {
+                M[i] = (float)rand()/(float)(RAND_MAX);
+        }
+}
+
+void matrix_init(float32_t *M, uint32_t cols, uint32_t rows, float32_t val) {
+        for (int i=0; i<rows; i++) {
+                for (int j=0; j<cols; j++) {
+                        M[j*rows + i] = val;
+                }
+        }
+}
+
+bool f32comp_noteq(float32_t a, float32_t b) {
+        if (fabs(a-b) < 0.000001) {
+                return false;
+        }
+        return true;
+}
+
+bool matrix_comp(float32_t *A, float32_t *B, uint32_t rows, uint32_t cols) {
+        float32_t a;
+        float32_t b;
+        for (int i=0; i<rows; i++) {
+                for (int j=0; j<cols; j++) {
+                        a = A[rows*j + i];
+                        b = B[rows*j + i];
+
+                        if (f32comp_noteq(a, b)) {
+                                printf("i=%d, j=%d, A=%f, B=%f\n", i, j, a, b);
+                                return false;
+                        }
+                }
+        }
+        return true;
+}
+
+int main() {
+        uint32_t n = 2*BLOCK_SIZE; // A 中的行数
+        uint32_t m = 2*BLOCK_SIZE; // B 中的列数
+        uint32_t k = 2*BLOCK_SIZE; // A 中的列数和 B 中的行数
+
+        float32_t A[n*k];
+        float32_t B[k*m];
+        float32_t C[n*m];
+        float32_t D[n*m];
+        float32_t E[n*m];
+
+        bool c_eq_asm;
+        bool c_eq_neon;
+        matrix_init_rand(A, n*k);
+        matrix_init_rand(B, k*m);
+        matrix_init(C, n, m, 0);
+        print_matrix(A, k, n);
+        print_matrix(B, m, k);
+        //print_matrix(C, n, m);
+
+        matrix_multiply_c(A, B, E, n, m, k);
+        printf("C\n");
+        print_matrix(E, n, m);
+        printf("===============================\n");
+
+        matrix_multiply_neon(A, B, D, n, m, k);
+        printf("Neon\n");
+        print_matrix(D, n, m);
+        c_eq_neon = matrix_comp(E, D, n, m);
+        printf("Neon equal to C? %d\n", c_eq_neon);
+        printf("===============================\n");
+}
+```
 
 上面完整的源代码可以在 Arm 机器上用以下命令编译和反汇编：
 
