@@ -53,7 +53,7 @@ arm-architecture-basic/
 | 09 | aarch64_memory_attributes_and_properties | AArch64内存属性与特性_中文翻译.md | 09-AArch64内存属性与特性_中文精读版.md |
 | 10 | memory_systems_ordering_and_barriers | 内存系统排序与屏障_中文翻译.md | 10-内存系统排序与屏障_中文精读版.md |
 
-### 11–15 · SIMD / 向量（Neon · SVE2）
+### 11–17 · SIMD / 向量（Neon · SVE/SVE2）
 
 | 编号 | 原文档（docs/） | 翻译版 | 精读版 |
 | --- | --- | --- | --- |
@@ -61,6 +61,8 @@ arm-architecture-basic/
 | 12 | optimizing_c_code_with_neon_intrinsics | 用Neon内建函数优化C代码_中文翻译.md | 12-用Neon内建函数优化C代码_中文精读版.md |
 | 13 | compiling_for_neon_with_auto-vectorization | 为Neon自动向量化编译_中文翻译.md | 13-为Neon自动向量化编译_中文精读版.md |
 | 15 | introducing_sve2_guide | SVE2入门_中文翻译.md | 15-SVE2入门_中文精读版.md |
+| 16 | SVE Optimization Guide | SVE优化指南_中文翻译.md | 16-SVE优化指南_中文精读版.md |
+| 17 | SVE-SVE2-programming-examples | SVE编程示例_中文翻译.md | 17-SVE编程示例_中文精读版.md |
 
 尚未整理（docs/ 中已有 PDF）：
 
@@ -83,6 +85,8 @@ arm-architecture-basic/
 | `12-neon-intrinsics` | 用 Neon 内建函数优化 C 代码 | 3 个 C++ demo（RGB 去交错 / 矩阵乘法 / 碰撞检测）+ `-O2` 交叉编译反汇编 + qemu 运行 |
 | `13-neon-auto-vectorization` | 为 Neon 自动向量化编译 | 2 个 C 示例，`-O1`（标量）vs `-O3`（向量）反汇编对照 + qemu 运行 |
 | `15-sve2` | SVE2 入门 | 2 个 C 示例（谓词向量加 / UADDLB 加宽加）+ `-march=armv8-a+sve2` 反汇编 + qemu `-cpu max` 运行 |
+| `16-sve-optimization` | SVE 优化指南 | SAXPY 四种实现（-O1 基准 / -O3 自动向量化 / 内建函数 / 汇编）+ 多级优化反汇编 + 性能对比 + qemu 运行 |
+| `17-sve-examples` | SVE/SVE2 编程示例 | 6 个示例（向量最大值 / 实数点积 / 复数乘法 / 复数点积 / FIR / 矩阵乘法），各含 C vs SVE2 正确性 + 性能对比，`-march=armv8-a+sve2` 反汇编 + qemu `-cpu max` 运行 |
 
 ## 使用方式
 
