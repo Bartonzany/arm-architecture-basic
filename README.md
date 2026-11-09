@@ -63,6 +63,7 @@ arm-architecture-basic/
 | 15 | introducing_sve2_guide | SVE2入门_中文翻译.md | 15-SVE2入门_中文精读版.md |
 | 16 | SVE Optimization Guide | SVE优化指南_中文翻译.md | 16-SVE优化指南_中文精读版.md |
 | 17 | SVE-SVE2-programming-examples | SVE编程示例_中文翻译.md | 17-SVE编程示例_中文精读版.md |
+| 18 | SVE_and_Neon_coding_compared | SVE与Neon编码对比_中文翻译.md | 18-SVE与Neon编码对比_中文精读版.md |
 
 尚未整理（docs/ 中已有 PDF）：
 
@@ -87,6 +88,7 @@ arm-architecture-basic/
 | `15-sve2` | SVE2 入门 | 2 个 C 示例（谓词向量加 / UADDLB 加宽加）+ `-march=armv8-a+sve2` 反汇编 + qemu `-cpu max` 运行 |
 | `16-sve-optimization` | SVE 优化指南 | SAXPY 四种实现（-O1 基准 / -O3 自动向量化 / 内建函数 / 汇编）+ 多级优化反汇编 + 性能对比 + qemu 运行 |
 | `17-sve-examples` | SVE/SVE2 编程示例 | 6 个示例（向量最大值 / 实数点积 / 复数乘法 / 复数点积 / FIR / 矩阵乘法），各含 C vs SVE2 正确性 + 性能对比，`-march=armv8-a+sve2` 反汇编 + qemu `-cpu max` 运行 |
+| `18-sve-neon-compared` | SVE 与 Neon 编码对比 | 矩阵乘法 C / Neon / SVE 三实现，反汇编对照（`fmla v0.4s` vs `fmla z3.s`）+ 正确性 + 性能对比 + qemu 运行 |
 
 ## 使用方式
 
