@@ -53,7 +53,7 @@ arm-architecture-basic/
 | 09 | aarch64_memory_attributes_and_properties | AArch64内存属性与特性_中文翻译.md | 09-AArch64内存属性与特性_中文精读版.md |
 | 10 | memory_systems_ordering_and_barriers | 内存系统排序与屏障_中文翻译.md | 10-内存系统排序与屏障_中文精读版.md |
 
-### 11–17 · SIMD / 向量（Neon · SVE/SVE2）
+### 11–21 · SIMD / 向量（Neon · SVE/SVE2）
 
 | 编号 | 原文档（docs/） | 翻译版 | 精读版 |
 | --- | --- | --- | --- |
@@ -64,10 +64,25 @@ arm-architecture-basic/
 | 16 | SVE Optimization Guide | SVE优化指南_中文翻译.md | 16-SVE优化指南_中文精读版.md |
 | 17 | SVE-SVE2-programming-examples | SVE编程示例_中文翻译.md | 17-SVE编程示例_中文精读版.md |
 | 18 | SVE_and_Neon_coding_compared | SVE与Neon编码对比_中文翻译.md | 18-SVE与Neon编码对比_中文精读版.md |
+| 21 | migrate_neon_to_sve | Neon迁移到SVE_中文翻译.md | 21-Neon迁移到SVE_中文精读版.md |
+
+### 22 · 中断控制器（GICv3/v4）
+
+| 编号 | 原文档（docs/） | 翻译版 | 精读版 |
+| --- | --- | --- | --- |
+| 22 | generic_interrupt_controller_v3_and_v4_overview | GICv3和v4概述_中文翻译.md | 22-GICv3和v4概述_中文精读版.md |
+
+### 26 · 系统内存管理单元（SMMUv3）
+
+| 编号 | 原文档（docs/） | 翻译版 | 精读版 |
+| --- | --- | --- | --- |
+| 26 | smmu_software_guide | SMMU软件指南_中文翻译.md | 26-SMMU软件指南_中文精读版.md |
 
 尚未整理（docs/ 中已有 PDF）：
 
 - `14-DEN0018A_neon_programmers_guide.pdf`
+- `19-arm_c1_scalable_matrix_extension_2_technical_reference_manual.pdf`（SME2 TRM）
+- `20-sme_programmers_guide.pdf`（SME 程序员指南）
 - `ISA_A64_xml_v88A-2021-12_OPT_RETIRED.pdf`
 
 ## 配套验证代码
@@ -89,6 +104,9 @@ arm-architecture-basic/
 | `16-sve-optimization` | SVE 优化指南 | SAXPY 四种实现（-O1 基准 / -O3 自动向量化 / 内建函数 / 汇编）+ 多级优化反汇编 + 性能对比 + qemu 运行 |
 | `17-sve-examples` | SVE/SVE2 编程示例 | 6 个示例（向量最大值 / 实数点积 / 复数乘法 / 复数点积 / FIR / 矩阵乘法），各含 C vs SVE2 正确性 + 性能对比，`-march=armv8-a+sve2` 反汇编 + qemu `-cpu max` 运行 |
 | `18-sve-neon-compared` | SVE 与 Neon 编码对比 | 矩阵乘法 C / Neon / SVE 三实现，反汇编对照（`fmla v0.4s` vs `fmla z3.s`）+ 正确性 + 性能对比 + qemu 运行 |
+| `21-migrate-neon-to-sve` | Neon 迁移到 SVE | 固定小循环「保留 Neon vs SVE VLA」反例（Neon 完全展开 vs SVE 谓词）+ qemu 运行；矩阵乘法示例见 `18-sve-neon-compared` |
+| `22-gic` | GICv3 和 v4 概述 | EL1 裸机（QEMU `gic-version=3`）验证三大编程接口、GICD_CTLR/GICR_WAKER/ICC_* 初始化、IAR/EOI、运行优先级 RPR、HPPIR、给自己发 SGI |
+| `26-smmu` | SMMU 软件指南 | EL1 裸机（QEMU `iommu=smmuv3`）验证 IDR 识别、流表、命令/事件队列（PROD/CONS）、最小配置七步 + CR0ACK 握手 + DSB |
 
 ## 使用方式
 
