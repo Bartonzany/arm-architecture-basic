@@ -285,6 +285,307 @@ IRQ 落 `+0x480`。
 
 ---
 
+## 六、代码详解（逐文件导读）
+
+上面五章是"原文概念 → 代码"的对照；这一章反过来，**逐文件、逐段解释
+`src/bare-metal/` 四个文件各自在做什么、每段代码是什么意思**。建议先读这里
+建立代码全景，再回看上面的概念对照。
+
+### 6.1 boot.S —— 引导降级（EL3 → EL2 → EL1 → EL0）
+
+复位进入 EL3 后，靠一系列 `ERET` 逐级往下降。每级要做的四件事固定不变：
+**设 VBAR_ELx、设栈、设控制寄存器、设 SPSR/ELR 再 eret**。
+
+#### 6.1.1 入口 `_start`
+
+```asm
+ldr     x19, =vector_table        // 把向量表地址存进 x19
+mrs     x0, currentel             // 读当前异常级别
+lsr     x0, x0, #2
+and     x0, x0, #3                // 取出 bits[3:2]，得到 0~3
+cmp     x0, #3                    // 判断从哪一级开始降，做健壮分支
+```
+
+- 为什么存进 **x19**？x19 是 AAPCS 的 callee-saved 寄存器，后面每级都要调
+  C 函数（`*_report`），C 函数保证不破坏 x19，所以 x19 一路保留到最后；
+  若用 x0~x18 这类 caller-saved，会被 C 调用清掉。
+- `CurrentEL` 的异常级别编码在 **bits[3:2]**（`0b00`=EL0 … `0b11`=EL3），所以
+  右移 2 位再掩 3。
+- 分支是为健壮：即便复位在 EL2 或 EL1，也能正确从那一级往下走（当前 QEMU
+  配置复位在 EL3）。
+
+#### 6.1.2 `start_el3`（Secure 固件）
+
+```asm
+msr     vbar_el3, x19             // 1. 装 EL3 向量表
+ldr     x2, =_stack_top_el3
+mov     sp, x2                    // 2. EL3 异常栈
+mov     x2, #0x501                // 3. SCR_EL3：NS+HCE+RW
+msr     scr_el3, x2
+mov     x2, #0x3c9                // 4. SPSR_EL3 = EL2h
+msr     spsr_el3, x2
+ldr     x2, =start_el2            //    ELR_EL3 = EL2 入口
+msr     elr_el3, x2
+bl      startup_banner            // 打印横幅 + STEP 1 标题
+bl      el3_report                // 打印 EL3 级别 + SCR_EL3/VBAR_EL3
+bl      el3_setup                 // Secure 阶段配 GIC（IGROUPR 是 Secure-only）
+eret                               // → EL2
+```
+
+关键含义：
+
+- `SCR_EL3=0x501` = `NS(bit0)+HCE(bit8)+RW(bit10)`。**NS=1** 让下一级进
+  Non-secure；**RW=1** 让下一级（EL2）是 AArch64；**HCE=1** 使能 HVC 指令。
+- `SPSR_EL3=0x3c9` 的 M 字段（bits[4:0]）= `0b01001`，即 **EL2h + AArch64**；
+  其余 DAIF=1111（进入 EL2 时中断全屏蔽，由后续代码再放开）。
+- 三个 `bl` 在 eret 之前：打印信息、配 GIC。其中 GIC 配在 Secure EL3 是
+  **必须**的——`GICD_IGROUPR` 等是 Secure-only，切到 Non-secure 后再写无效。
+
+#### 6.1.3 `start_el2`（Hypervisor）与 `start_el1`（内核）
+
+```asm
+start_el2:
+    msr     vbar_el2, x19          // VBAR_EL2
+    ldr     x2, =_stack_top_el2
+    mov     sp, x2                 // SP_EL2
+    mov     x2, #0x80000000        // HCR_EL2.RW=1 → EL1 是 AArch64
+    msr     hcr_el2, x2
+    mov     x2, #0x3c5             // SPSR_EL2 = EL1h
+    msr     spsr_el2, x2
+    ldr     x2, =start_el1         // ELR_EL2 = EL1 入口
+    msr     elr_el2, x2
+    bl      el2_report
+    eret                            // → EL1
+
+start_el1:
+    msr     vbar_el1, x19
+    ldr     x2, =_stack_top_el1
+    mov     sp, x2                 // SP_EL1
+    ldr     x2, =_stack_top_el0
+    msr     sp_el0, x2             // 提前备好 EL0 栈
+    mov     x2, #0x200             // CNTKCTL_EL1.EL0PTEN=1
+    msr     cntkctl_el1, x2        // 允许 EL0 访问物理定时器
+    mov     x2, #0x0               // SPSR_EL1 = EL0t + DAIF 不屏蔽
+    msr     spsr_el1, x2
+    ldr     x2, =main              // ELR_EL1 = main
+    msr     elr_el1, x2
+    bl      el1_report
+    eret                            // → EL0
+```
+
+- `HCR_EL2.RW=1`、`SPSR_EL2=EL1h`、`SPSR_EL1=EL0t` 依次决定"下一级是 AArch64、
+  用什么栈"——正是原文 §3.1/§7.5 说的"执行状态和栈指针选择由更高 EL 拍板"。
+- `SPSR_EL1=0`（EL0t + DAIF=0000）里 **DAIF 全 0**，意味着到 EL0 后中断不被
+  屏蔽——后文定时器 IRQ 能直接打断 EL0。
+
+#### 6.1.4 一个关键坑：栈指针怎么设
+
+```asm
+mov sp, x2        // EL3/EL2/EL1：本级改栈只能 mov sp
+msr sp_el0, x2    // EL1：给 EL0 备栈用 msr sp_el0
+```
+
+`SP_EL1`/`SP_EL2`/`SP_EL3` **不能在本级用 `msr` 直接写**：它们的编码 op1=4 表示
+"访问更低 EL 的 banked 栈指针"，只允许在更高 EL 执行，本级执行会 UNDEFINED。
+本级当前栈 `sp` 本来就映射到该级的 `SP_ELx`，所以 `mov sp` 即可；唯独 EL0 只
+能用 `SP_EL0`，需要由 EL1 用 `msr sp_el0` 提前设好。
+
+### 6.2 vector_table.S —— 共享向量表 + 异常处理器
+
+#### 6.2.1 16 入口布局
+
+```asm
+.section .text.vector, "ax"
+.balign 0x800              // 向量表需 0x800 对齐（VBAR 要求）
+.global vector_table
+
+.macro ventry label
+    b       \label
+    .balign 0x80           // 每个入口 0x80 字节（32 条指令）
+.endm
+```
+
+- `ventry` 宏：每个入口放一条 `b` 跳到处理代码，再 `.balign 0x80` 对齐到下一个
+  入口，保证 16 个入口的偏移对应正确（+0x000/+0x080/…/+0x780）。
+- 4 组 × 4 类：`+0x000/0x200/0x400/0x600` 是同步，`+0x080/…` IRQ，`+0x100` FIQ，
+  `+0x180` SError；来源分"当前 EL+SP_EL0 / 当前 EL+SP_ELx / 低 EL AArch64 /
+  低 EL AArch32"。
+- 本示例只有两个入口是"活的"：`+0x400` 同步（`lower_el_sync_handler`）和
+  `+0x480` IRQ（`lower_el_irq_handler`），其余全接 `unexpected_handler`。
+
+#### 6.2.2 `save_all` / `restore_all`
+
+```asm
+.macro save_all
+    stp     x0,  x1,  [sp, #-16]!
+    ...                        // x0~x18
+    stp     x18, x29, [sp, #-16]!
+    str     x30, [sp, #-16]!   // x29 帧指针、x30 返回地址
+.endm
+```
+
+- 中断是异步的，处理器不知道被打断的程序正在用哪些寄存器，所以要把**全部
+  caller-saved 寄存器（x0~x18）+ 帧指针 x29 + 返回地址 x30** 压栈；x19~x28 是
+  callee-saved，由 C 函数自行保存，这里不管。
+- `stp ..., [sp, #-16]!` 是"先减栈、再存两寄存器"的推入写法，`restore_all` 用
+  `ldp ..., [sp], #16` 反向弹出，一一对应。
+
+#### 6.2.3 `lower_el_sync_handler`（同步异常公共入口）
+
+```asm
+save_all                       // 压现场
+mrs     x0, currentel         // 判断当前是 EL1/EL2/EL3
+lsr     x0, x0, #2
+and     x0, x0, #3
+mov     x19, x0               // 级别存 x19（callee-saved）
+// 按级别读 ESR/ELR/SPSR 到 x1/x2/x3
+cmp     x0, #3
+b.eq    1f
+cmp     x0, #2
+b.eq    2f
+mrs     x1, esr_el1          // EL1
+mrs     x2, elr_el1
+mrs     x3, spsr_el1
+b       3f
+2:      mrs     x1, esr_el2   // EL2
+        ...
+1:      mrs     x1, esr_el3   // EL3
+        ...
+3:
+bl      dispatch_sync          // C 分派：dispatch_sync(level, esr, elr, spsr)
+                               // 返回 x0=1 表示要跳过触发指令
+cbz     x0, 4f                // 返回 0 → 直接 eret
+// 返回 1 → 把对应 ELR_ELx +4（跳过 BRK/UDF 这类把 ELR 指向自身的指令）
+mrs     x5, elr_el1
+add     x5, x5, #4
+msr     elr_el1, x5
+4:
+restore_all
+eret
+```
+
+这段体现了两件架构事实：
+
+1. **硬件自动填好了三个寄存器**：进入异常时，硬件已把 PSTATE→`SPSR_ELx`、
+   返回地址→`ELR_ELx`、原因→`ESR_ELx`，这里只是把它们读出来交给 C 打印/分派。
+2. **ELR 的语义因异常类型而异**：SVC/HVC/SMC 的 ELR 指向"下一条指令"，直接
+   eret 即继续；但 BRK/UDF 的 ELR 指向"触发指令本身"，若直接 eret 会死循环，
+   所以 `dispatch_sync` 返回 1，汇编把 ELR_ELx +4 跳过该指令。
+
+### 6.3 main.c —— 日志框架 + 异常分发 + 演示主流程
+
+#### 6.3.1 硬件基址（顶部的宏）
+
+```c
+#define UART0_DR ((volatile unsigned int *)0x09000000)   // PL011 串口数据寄存器
+#define GICD_CTLR ((volatile unsigned int *)0x08000000)  // GICv2 分发器控制
+#define GICC_IAR  ((volatile unsigned int *)0x0801000C)  // 中断确认寄存器
+#define GICC_EOIR ((volatile unsigned int *)0x08010010)  // 中断结束寄存器
+#define TIMER_IRQ_ID 30                                  // EL1 物理定时器 PPI
+```
+
+全是 QEMU `-machine virt` 的物理外设地址，用 `volatile` 指针直接读写 MMIO。
+`TIMER_IRQ_ID=30` 是 SBSA 定义的 EL1 物理定时器私有外设中断号。
+
+#### 6.3.2 日志框架（工程化输出，非核心逻辑）
+
+`uart_putc/puts/puthex/putdec` 只是串口字节输出；`tag_color()` 按标签前缀返回
+ANSI 颜色；`log_begin/log_line/log_reg/log_kv/log_step/log_test/log_banner` 拼出
+带颜色、对齐的日志行。这层只是"让输出好看"，与异常模型本身无关，可跳过。
+
+#### 6.3.3 引导时期的几个函数
+
+- `startup_banner()`：打印启动横幅 + 键值对信息 + `STEP 1/2` 标题。
+- `el3_report/el2_report/el1_report()`：`mrs` 读本级的 SCR_EL3 / HCR_EL2 /
+  SCTLR_EL1 并打印——只想说明"到哪一级就够权限读哪一级的寄存器"。
+- `el3_setup()`：在 Secure EL3 配 GIC（上一章 §4.1 已解释为什么必须在 Secure）。
+
+#### 6.3.4 `dispatch_sync` —— 同步异常的分发核心
+
+```c
+int dispatch_sync(level, esr, elr, spsr) {
+    unsigned int ec  = (esr >> 26) & 0x3F;   // ESR[31:26] = 异常类
+    unsigned int imm = esr & 0xFFFF;         // ESR[15:0]  = SVC 立即数
+    int skip = 0;
+    // 打印"到达 ELx：EC=… imm=…" + ELR/SPSR
+
+    if (level == 1) {
+        if (ec == 0x15) {                    // SVC
+            if (imm == 0x42) {               // 立即数标记"走链条"
+                hvc #0;                      // 转发到 EL2
+            } else {                         // 普通 SVC
+                ;                            // 直接返回
+            }
+        } else if (ec == 0x3c)  skip = 1;    // BRK：ELR 要 +4
+        else if (ec == 0x00)    skip = 1;    // UDF：ELR 要 +4
+        else if (ec == 0x24||0x25) skip = 1; // 数据中止
+    } else if (level == 2) {
+        if (ec == 0x16) smc #0;              // HVC→EL3
+    } else if (level == 3) {
+        if (ec == 0x17) ;                    // SMC 终点
+    }
+    return skip;                              // 1=让汇编把 ELR+4
+}
+```
+
+- `ec` 从 ESR[31:26] 取，**EC=0x15=SVC、0x16=HVC、0x17=SMC、0x3C=BRK、0x00=
+  UNDEFINED**——"异常到底为啥发生"全编码在 ESR 里。
+- **链条的实现方式**：EL1 收到 SVC 就再执行 `hvc`、EL2 收到 HVC 就再执行 `smc`，
+  形成嵌套异常；每级处理完 `eret` 自然逐级退回。imm==0x42 只是区分"普通往返/
+  走链条"的开关。
+- **返回值 `skip` 与汇编协作**：BRK/UDF 这类 ELR 指向自身，返回 1，汇编把对应
+  `ELR_ELx+4`，避免 eret 后重跑同一条指令死循环。
+
+#### 6.3.5 异步异常处理器
+
+```c
+void irq_handler_c(void) {
+    unsigned int iar = *GICC_IAR;      // 读中断确认 = 拿到 INTID
+    unsigned int id  = iar & 0x3FF;
+    ...
+    *GICC_EOIR = iar;                  // 写中断结束
+    msr cntp_ctl_el0, 0;               // 禁用定时器清电平中断
+    g_irq_ok = 1;
+}
+```
+
+三件套对应 §4.1：**读 IAR 识别中断 → 清 ENABLE 清除电平中断 → 写 EOIR 结束**。
+`fiq_handler_c`/`serror_handler_c` 只是占位（打印），本示例不触发。
+
+#### 6.3.6 `main` —— 5 个异常演示
+
+```c
+svc #0;       // ① SVC 简单往返（EL0→EL1→EL0）
+svc #0x42;    // ② SVC/HVC/SMC 完整链条
+brk #0;       // ③ BRK 调试异常
+udf #0;       // ④ UDF 无效指令
+timer_irq_demo();  // ⑤ 定时器 IRQ（异步）
+```
+
+每条异常指令都会打断当前 EL0 执行流、经向量表走一遍"进入异常 → 处理 → ERET"，
+再回到下一条指令继续，所以能顺序把五类异常各验一遍。
+
+### 6.4 linker.ld —— 内存布局与 4 个异常栈
+
+```ld
+SECTIONS {
+    . = 0x40000000;             // QEMU virt RAM 起点 = 复位入口
+    .text : { *(.text.boot) *(.text.vector) *(.text*) }
+    ...
+    . += 0x1000; _stack_top_el3 = .;   // EL3 栈 4KB
+    . += 0x1000; _stack_top_el2 = .;   // EL2 栈 4KB
+    . += 0x1000; _stack_top_el1 = .;   // EL1 栈 4KB
+    . += 0x1000; _stack_top_el0 = .;   // EL0 栈 4KB
+}
+```
+
+- `.text.boot` 在最前、`.text.vector` 紧随其后，保证 `_start` 在 0x40000000、
+  向量表在其后 0x800 对齐处（所以输出里 `VBAR=0x40000800`）。
+- 给四个异常级别各留 4KB 独立栈（`_stack_top_el3/2/1/0` 依次递增、互不重叠），
+  对应 boot.S 里每级 `mov sp` / `msr sp_el0` 取用的栈顶。
+
+---
+
 ## 附：完整执行输出
 
 一次运行（`make -C src/bare-metal run`）的完整输出（终端里带颜色，此处为去色的
