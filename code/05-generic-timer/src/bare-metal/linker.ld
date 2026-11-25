@@ -1,6 +1,6 @@
 /* linker.ld — QEMU -machine virt 裸机链接脚本
  *
- * QEMU virt 机器 RAM 从 0x40000000 开始，入口即该地址。
+ * QEMU virt 机器 RAM 从 0x40000000 开始，复位入口即该地址。
  */
 ENTRY(_start)
 
@@ -19,6 +19,5 @@ SECTIONS
     .bss    : { *(.bss*) }
 
     . = ALIGN(16);
-    /* 64KB 栈，_stack_top 指向栈顶（高地址）*/
-    _stack_top = . + 0x10000;
+    _stack_top = . + 0x10000;   /* 64KB 栈，栈顶指向高地址 */
 }

@@ -1,27 +1,42 @@
-/* boot.S — 裸机启动代码（AArch64, EL1）
+/* boot.S — 裸机启动：EL3 引导，配置系统计数器频率与异常路由
  *
- * 复位后从 EL1 开始执行（QEMU -machine virt 默认进入 EL1）：
- *   1. 设置 SP_EL1 栈指针
- *   2. 设置 VBAR_EL1 指向异常向量表
- *   3. 跳转 C 入口 main
+ * QEMU -machine virt,secure=on 复位进入 EL3（Secure 世界）。
+ * 参考 ARM 官方 generic_timer 示例（startup.s），全程在 EL3 运行：
+ *   1) 设 SP_EL3 栈、VBAR_EL3
+ *   2) 设 CNTFRQ_EL0（固件在最高 EL 填系统计数频率）
+ *   3) 设 SCR_EL3：ST=1（S.EL1 可访问 CNTPS）、RW=1（EL1 为 AArch64）、
+ *      EA/FIQ/IRQ=1（SError/FIQ/IRQ 路由到 EL3）
+ * 之后跳 C 入口 main（GIC 与定时器在 main 里配置）。
  */
 
 .section .text.boot, "ax"
 .global _start
 
 _start:
-    // 设置栈指针（栈向低地址增长，SP 指向栈顶）
-    ldr     x0, =_stack_top
-    mov     sp, x0
+    // 向量表基址
+    ldr     x19, =vector_table
+    msr     vbar_el3, x19
 
-    // 设置向量基址寄存器 VBAR_EL1 = vector_table
-    ldr     x0, =vector_table
-    msr     vbar_el1, x0
+    // EL3 异常栈（EL3 恒用 SP_EL3，即当前 sp）
+    ldr     x2, =_stack_top
+    mov     sp, x2
 
-    // 进入 C 代码
+    // CNTFRQ_EL0 = 62.5MHz（QEMU virt 默认频率）
+    // 文档 §2.1：CNTFRQ 硬件不自动填，由固件在 EL3 写入，其他 EL 只读
+    ldr     x2, =62500000
+    msr     cntfrq_el0, x2
+
+    // SCR_EL3：
+    //   bit11 ST  = 1 -> S.EL1 可访问 CNTPS_*（安全物理定时器）
+    //   bit10 RW  = 1 -> 下一级 EL1 为 AArch64
+    //   bit3  EA  = 1 -> SError 路由到 EL3
+    //   bit2  FIQ = 1 -> FIQ 路由到 EL3
+    //   bit1  IRQ = 1 -> IRQ 路由到 EL3
+    mov     x2, #((1 << 11) | (1 << 10) | (1 << 3) | (1 << 2) | (1 << 1))
+    msr     scr_el3, x2
+
     bl      main
 
-// 主程序返回后死循环（本例 main 不会返回）
 hang:
     wfe
     b       hang

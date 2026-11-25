@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build_all.sh — 一键交叉编译 EL1 裸机通用定时器示例 + 反汇编 + 运行
+# build_all.sh — 一键交叉编译 EL3 裸机通用定时器示例 + 反汇编 + 运行
 #
 # 用法：
 #   ./scripts/build_all.sh            # 编译 + 反汇编
@@ -17,7 +17,7 @@ if [[ "${1:-}" == "clean" ]]; then
     exit 0
 fi
 
-echo "编译 EL1 裸机通用定时器示例..."
+echo "编译 EL3 裸机通用定时器示例..."
 make -C "$BM" build disasm
 
 echo
@@ -26,6 +26,6 @@ echo "  裸机示例 : $ROOT/build/bare-metal/（kernel.elf + kernel.dis）"
 
 if [[ "${1:-}" == "--run" ]]; then
     echo
-    echo "===== 通用定时器（频率/计数/CVAL·TVAL/中断）====="
+    echo "===== 通用定时器（CNTPS CVAL + CNTP TVAL + FIQ）====="
     make -C "$BM" run || true
 fi
