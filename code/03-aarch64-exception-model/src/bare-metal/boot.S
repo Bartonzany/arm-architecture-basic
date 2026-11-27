@@ -14,11 +14,16 @@
  * 本文件对复位 EL 做健壮分支：EL3/EL2/EL1 启动都能正确降到 EL0。
  */
 
+// .section .text.boot, "ax"：定义可分配(allocatable)+可执行(executable)的段，
+//   约定放镜像最开头（复位后第一条指令、ELF 入口 _start 所在位置）。
+// .global _start：把 _start 标记为全局符号，供链接器当入口点（ENTRY(_start)）。
 .section .text.boot, "ax"
 .global _start
 
 _start:
-    // x19 全程保存共享向量表地址（callee-saved，跨 bl 调用不丢失）
+    // 向量表地址存 x19：PCS 规定 X19–X28 是"被调用者保存"寄存器——被调用的
+    // C 函数（*_report 等）若用到须先保存、返回前恢复，故跨 bl 调用不丢；
+    // X0–X18 是"调用者保存"，C 可随意破坏，不能用来跨调用保存。
     ldr     x19, =vector_table
 
     // 读当前异常级别：CurrentEL 的 bits[3:2] = 级别（0=EL0,1=EL1,2=EL2,3=EL3）
@@ -53,8 +58,8 @@ start_el3:
 
     mov     x2, #0x3c9                      // SPSR: EL2h + AArch64 + DAIF 全屏蔽
     msr     spsr_el3, x2
-    ldr     x2, =start_el2                  // ELR: 下一级入口
-    msr     elr_el3, x2
+    ldr     x2, =start_el2                  // 下一级入口地址（EL2 代码起点）
+    msr     elr_el3, x2                     // 写 ELR_EL3：eret 时 PC 跳到 start_el2
 
     bl      startup_banner                  // 启动横幅 + 基本信息 + STEP 1 标题
     bl      el3_report                      // 打印本级别信息

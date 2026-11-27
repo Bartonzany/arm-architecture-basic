@@ -75,6 +75,27 @@ __asm__ volatile("svc #0x42");   // EL0 -> EL1
 **为什么**：一条 `svc` 就串起了完整的 EL0→EL1→EL2→EL3 上升链，再靠三次
 `eret` 逐级下降，完美印证“升靠异常、降靠 ERET”。
 
+**嵌套是怎么形成的**：EL1 的异常处理器还没处理完，就在它内部执行 `hvc #0`，
+于是被更高层的 EL2 异常打断；EL2 处理器同样在内部执行 `smc #0`，又被 EL3 打断。
+各层能互不干扰，靠的是**每个 EL 有各自独立的一组 `SPSR_ELx`/`ELR_ELx`**：
+
+```
+EL0:  svc #0x42  ──────────────────────────── 回到 EL0 继续 ──→
+        │ 触发 SVC                                    ↑ eret
+        ↓ 硬件把 EL0 状态存 SPSR_EL1/ELR_EL1           │
+EL1:   dispatch_sync(level=1)                         │
+            │ 执行 hvc #0（处理到一半又触发）           │
+            ↓ 硬件把 EL1 状态存 SPSR_EL2/ELR_EL2       │
+EL2:       dispatch_sync(level=2)                     │
+                │ 执行 smc #0（又触发）                │
+                ↓ 硬件把 EL2 状态存 SPSR_EL3/ELR_EL3   │
+EL3:           dispatch_sync(level=3) ── eret 逐级弹回 ┘
+```
+
+`SPSR_EL1`/`SPSR_EL2`/`SPSR_EL3` 是三个不同寄存器，各存各的现场、互不覆盖；
+返回时 `eret` 按 LIFO 顺序一层层弹回（EL3→EL2→EL1→EL0），本质和函数调用栈
+（一层调一层、一层返回一层）是同一个结构。
+
 ### 1.3 寄存器访问特权
 
 **文段**：系统寄存器带 `_ELx` 后缀表示访问需的最低 EL（`SCTLR_EL1` 需 EL1+）。
@@ -296,7 +317,24 @@ IRQ 落 `+0x480`。
 复位进入 EL3 后，靠一系列 `ERET` 逐级往下降。每级要做的四件事固定不变：
 **设 VBAR_ELx、设栈、设控制寄存器、设 SPSR/ELR 再 eret**。
 
-#### 6.1.1 入口 `_start`
+#### 6.1.1 两条 GAS 伪指令（本文件开头）
+
+```asm
+.section .text.boot, "ax"
+.global _start
+```
+
+- `.section .text.boot, "ax"`：定义一个名为 `.text.boot` 的段，"ax" 表示该段
+  **可分配（allocatable）且可执行（executable）**。`.text.boot` 这个名字约定
+  俗成地告诉链接脚本："这是最早执行的引导代码"，要放在镜像最开头（ELF 入口
+  `_start` 所在位置，即复位后映射到的起始地址）。
+- `.global _start`：把 `_start` 标记为**全局符号**，使其对链接器和其他目标文件
+  可见；链接器据此把它当作程序入口点（链接脚本里的 `ENTRY(_start)`），CPU 上电/
+  复位后跳转到的第一条指令就从这里开始执行。
+- 简言之：第一行把引导代码放进专门的启动段，第二行让启动标签对外可见，二者
+  配合保证"复位后第一条指令就是 `_start` 处的代码"。
+
+#### 6.1.2 入口 `_start`
 
 ```asm
 ldr     x19, =vector_table        // 把向量表地址存进 x19
@@ -306,15 +344,25 @@ and     x0, x0, #3                // 取出 bits[3:2]，得到 0~3
 cmp     x0, #3                    // 判断从哪一级开始降，做健壮分支
 ```
 
-- 为什么存进 **x19**？x19 是 AAPCS 的 callee-saved 寄存器，后面每级都要调
-  C 函数（`*_report`），C 函数保证不破坏 x19，所以 x19 一路保留到最后；
-  若用 x0~x18 这类 caller-saved，会被 C 调用清掉。
+- 为什么存进 **x19**？这是 PCS（过程调用标准，《A64 指令集架构指南》§26）定下
+  的"谁能破坏谁"规则——后面每级都要调 C 函数（`*_report` 等），按 PCS 的通用
+  寄存器分工：
+
+  | 寄存器 | 角色 | 跨 `bl` 调用 |
+  | --- | --- | --- |
+  | X0–X7 | 参数/结果 | 被破坏（调用者保存） |
+  | X9–X15 | 临时 | 被破坏（调用者保存） |
+  | **X19–X28** | **被调用者保存** | **不丢（C 用了会先存后恢复）** |
+  | X29 / X30 | 帧指针 / 链接寄存器 | — |
+
+  所以把地址放 X19–X28 里任何一个都能跨调用保活，这里选 x19 是任意的第一个；
+  若放 X0–X18 之类的 caller-saved，`bl *_report` 一进去值就没了。
 - `CurrentEL` 的异常级别编码在 **bits[3:2]**（`0b00`=EL0 … `0b11`=EL3），所以
   右移 2 位再掩 3。
 - 分支是为健壮：即便复位在 EL2 或 EL1，也能正确从那一级往下走（当前 QEMU
   配置复位在 EL3）。
 
-#### 6.1.2 `start_el3`（Secure 固件）
+#### 6.1.3 `start_el3`（Secure 固件）
 
 ```asm
 msr     vbar_el3, x19             // 1. 装 EL3 向量表
@@ -325,7 +373,7 @@ msr     scr_el3, x2
 mov     x2, #0x3c9                // 4. SPSR_EL3 = EL2h
 msr     spsr_el3, x2
 ldr     x2, =start_el2            //    ELR_EL3 = EL2 入口
-msr     elr_el3, x2
+msr     elr_el3, x2               // 写 ELR_EL3：eret 时 PC 跳到 start_el2
 bl      startup_banner            // 打印横幅 + STEP 1 标题
 bl      el3_report                // 打印 EL3 级别 + SCR_EL3/VBAR_EL3
 bl      el3_setup                 // Secure 阶段配 GIC（IGROUPR 是 Secure-only）
@@ -337,11 +385,13 @@ eret                               // → EL2
 - `SCR_EL3=0x501` = `NS(bit0)+HCE(bit8)+RW(bit10)`。**NS=1** 让下一级进
   Non-secure；**RW=1** 让下一级（EL2）是 AArch64；**HCE=1** 使能 HVC 指令。
 - `SPSR_EL3=0x3c9` 的 M 字段（bits[4:0]）= `0b01001`，即 **EL2h + AArch64**；
-  其余 DAIF=1111（进入 EL2 时中断全屏蔽，由后续代码再放开）。
+  其余 DAIF=1111（进入 EL2 时中断全屏蔽，由后续代码再放开）。其中 M[4]=0 表示
+  AArch64（=1 才是 AArch32），M[3:2]=`0b10` 选 EL2，M[0] 选栈：`h`=用本级别的
+  SP_EL2、`t`=用共享的 SP_EL0——这里选 h 是让 EL2 用独立栈。
 - 三个 `bl` 在 eret 之前：打印信息、配 GIC。其中 GIC 配在 Secure EL3 是
   **必须**的——`GICD_IGROUPR` 等是 Secure-only，切到 Non-secure 后再写无效。
 
-#### 6.1.3 `start_el2`（Hypervisor）与 `start_el1`（内核）
+#### 6.1.4 `start_el2`（Hypervisor）与 `start_el1`（内核）
 
 ```asm
 start_el2:
@@ -378,7 +428,7 @@ start_el1:
 - `SPSR_EL1=0`（EL0t + DAIF=0000）里 **DAIF 全 0**，意味着到 EL0 后中断不被
   屏蔽——后文定时器 IRQ 能直接打断 EL0。
 
-#### 6.1.4 一个关键坑：栈指针怎么设
+#### 6.1.5 一个关键坑：栈指针怎么设
 
 ```asm
 mov sp, x2        // EL3/EL2/EL1：本级改栈只能 mov sp
@@ -389,6 +439,17 @@ msr sp_el0, x2    // EL1：给 EL0 备栈用 msr sp_el0
 "访问更低 EL 的 banked 栈指针"，只允许在更高 EL 执行，本级执行会 UNDEFINED。
 本级当前栈 `sp` 本来就映射到该级的 `SP_ELx`，所以 `mov sp` 即可；唯独 EL0 只
 能用 `SP_EL0`，需要由 EL1 用 `msr sp_el0` 提前设好。
+
+那"给 EL0 备的栈"为什么不放到 `start_el0` 里设？因为两个原因：
+
+1. **正常降级路径不经过 `start_el0`**：EL1 到 EL0 是 `eret`（`ELR_EL1=main`），
+   直接落到 `main`，`start_el0` 只是 `_start` 开头"复位即 EL0"的兜底分支，正常
+   走不到——放那里就等于没设。
+2. **EL0 没权限执行 `msr sp_el0`**：该访问要 EL1+，EL0 里会 UNDEFINED；EL0 里
+   只能用 `mov sp`（其 `sp` 即 SP_EL0），但 EL0 还没进 `main`、没人给它 `sp` 初值。
+
+所以必须由 EL1 在 eret 之前用 `msr sp_el0` 备好，eret 一落进 EL0 栈就绪——这是
+"高 EL 为低 EL 准备上下文"的典型例子（原文档 §7.5）。
 
 ### 6.2 vector_table.S —— 共享向量表 + 异常处理器
 
@@ -464,6 +525,14 @@ restore_all
 eret
 ```
 
+> **关于标签写法**：`b.eq 1f` 里的 `1f` 是 GNU 汇编的**局部标签**——`1f`=向前
+> （forward）找最近的 `1:` 标签，数字只是"标签名字"（局部标签可用 0~9），不是
+> 顺序编号。所以上面 `1:` 标 EL3、`2:` 标 EL2、`3:` 是汇合点，编号和物理顺序
+> 不一致完全正常。这样编排是刻意为之：**EL1 是最常走的热路径**（SVC/BRK/UDF
+> 都从 EL0 降到 EL1），放在 `b.eq` 之后的顺序位置（fall-through，省一次跳转）；
+> EL2（HVC）/EL3（SMC）只在链条里偶尔走一次，用 `1f`/`2f` 跳过去。三个标签的
+> 物理排列是"EL1(顺序) → EL2(`2:`) → EL3(`1:`) → 汇合(`3:`)"。
+
 这段体现了两件架构事实：
 
 1. **硬件自动填好了三个寄存器**：进入异常时，硬件已把 PSTATE→`SPSR_ELx`、
@@ -471,6 +540,11 @@ eret
 2. **ELR 的语义因异常类型而异**：SVC/HVC/SMC 的 ELR 指向"下一条指令"，直接
    eret 即继续；但 BRK/UDF 的 ELR 指向"触发指令本身"，若直接 eret 会死循环，
    所以 `dispatch_sync` 返回 1，汇编把 ELR_ELx +4 跳过该指令。
+3. **"读"和"改"是两回事**：前面 `mrs x1/x2/x3` 只是把 ESR/ELR/SPSR **读出来
+   打印**，不改任何东西；后面 `mrs…add…msr elr_elx` 才是真正**修改返回地址**
+   （+4 跳过触发指令，A64 一条指令 4 字节）。写回哪个 `ELR_ELx` 取决于当前级别
+   （eret 从当前级别返回，用的就是该级 ELR_ELx），所以又按 x19 判断了一次——
+   这就是"打印读一遍、改地址又按级别写一遍"的原因。
 
 ### 6.3 main.c —— 日志框架 + 异常分发 + 演示主流程
 
@@ -530,9 +604,18 @@ int dispatch_sync(level, esr, elr, spsr) {
 
 - `ec` 从 ESR[31:26] 取，**EC=0x15=SVC、0x16=HVC、0x17=SMC、0x3C=BRK、0x00=
   UNDEFINED**——"异常到底为啥发生"全编码在 ESR 里。
+- `imm = esr & 0xFFFF` 是取 ESR 的**低 16 位**：A64 的 SVC/HVC/SMC 指令各带一个
+  16 位立即数（imm16，如 `svc #0x42` 里的 `0x42`），硬件执行该指令时把这个
+  imm16 自动搬进 `ESR[15:0]`，软件从 ESR 读即可、不必去解析指令机器码。
+- **参数怎么传进来的（AAPCS）**：`dispatch_sync(level, esr, elr, spsr)` 的四个
+  参数按 AAPCS 依次放在 **X0/X1/X2/X3**。汇编在 `bl dispatch_sync` 之前已把
+  level 留在 x0（读 currentel 的产物，中间 `cmp`/`mrs x1~x3` 都不碰 x0）、把
+  esr/elr/spsr 读进 x1/x2/x3，所以调用瞬间正好对位。之所以还要 `mov x19, x0`
+  备份 level：x0 是 caller-saved，dispatch_sync 返回后 x0 变成 skip，后面
+  "ELR+4"那段还得靠 callee-saved 的 x19 拿回级别。
 - **链条的实现方式**：EL1 收到 SVC 就再执行 `hvc`、EL2 收到 HVC 就再执行 `smc`，
-  形成嵌套异常；每级处理完 `eret` 自然逐级退回。imm==0x42 只是区分"普通往返/
-  走链条"的开关。
+  形成嵌套异常；每级处理完 `eret` 自然逐级退回（嵌套机制见 §1.2）。imm==0x42
+  只是区分"普通往返/走链条"的开关。
 - **返回值 `skip` 与汇编协作**：BRK/UDF 这类 ELR 指向自身，返回 1，汇编把对应
   `ELR_ELx+4`，避免 eret 后重跑同一条指令死循环。
 

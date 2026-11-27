@@ -113,24 +113,27 @@ lower_el_sync_handler:
     mrs     x3, spsr_el3
 3:
     bl      dispatch_sync           // dispatch_sync(level=x0, esr=x1, elr=x2, spsr=x3)
-                                    // 返回 x0 = 是否需要跳过触发指令
+                                    // 返回 x0：0=不必跳过（SVC/HVC/SMC），1=需跳过（BRK/UDF/中止）
 
+    // BRK/UDF 等异常的 ELR_ELx 指向"触发指令本身"（不像 SVC/HVC/SMC 指向下一条），
+    // 直接 eret 会重跑同一条指令再触发异常、死循环；须把 ELR_ELx +4 跳过它
+    // （A64 每条指令 4 字节）。dispatch_sync 返回 1 时执行下面这段。
     cbz     x0, 4f
-    // 需要跳过触发指令：把对应 ELR_ELx 加 4
-    mov     x4, #4
-    cmp     x19, #3
+
+    mov     x4, #4                  // +4 = 跳过一条 A64 指令
+    cmp     x19, #3                 // 写回哪个 ELR_ELx，取决于当前级别 x19
     b.eq    5f
     cmp     x19, #2
     b.eq    6f
-    mrs     x5, elr_el1
+    mrs     x5, elr_el1             // EL1：ELR_EL1 += 4
     add     x5, x5, x4
     msr     elr_el1, x5
     b       4f
-6:  mrs     x5, elr_el2
+6:  mrs     x5, elr_el2             // EL2：ELR_EL2 += 4
     add     x5, x5, x4
     msr     elr_el2, x5
     b       4f
-5:  mrs     x5, elr_el3
+5:  mrs     x5, elr_el3             // EL3：ELR_EL3 += 4
     add     x5, x5, x4
     msr     elr_el3, x5
 4:
