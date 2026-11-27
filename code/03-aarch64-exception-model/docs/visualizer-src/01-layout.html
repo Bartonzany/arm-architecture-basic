@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AArch64 异常模型可视化 — 单步执行模拟器</title>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c2129; --border:#30363d;
+  --text:#c9d1d9; --dim:#8b949e; --dimmer:#6e7681;
+  --el0:#2ee65a; --el1:#00d2ff; --el2:#ff5aff; --el3:#ffcd00;
+  --sync:#4696ff; --async:#ff9600; --irq:#ff4646; --ok:#32ff32;
+  --hl:#58a6ff; --hwbg:#2d1e2e;
+}
+*{box-sizing:border-box; margin:0; padding:0}
+body{
+  background:var(--bg); color:var(--text);
+  font:14px/1.5 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  height:100vh; display:grid; grid-template-rows:auto minmax(0,1fr) 232px; overflow:hidden;
+}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+
+header{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  padding:8px 12px; border-bottom:1px solid var(--border); background:var(--panel);
+}
+header h1{font-size:16px; font-weight:600; margin-right:6px}
+header h1 small{color:var(--dim); font-weight:400; font-size:12px; margin-left:8px}
+.btn{
+  background:#21262d; color:var(--text); border:1px solid var(--border); border-radius:6px;
+  padding:5px 14px; cursor:pointer; font-size:13px;
+}
+.btn:hover{background:#30363d; border-color:#8b949e}
+.btn.primary{background:#1f6feb; border-color:#1f6feb; color:#fff}
+.btn.primary:hover{background:#388bfd}
+#prog{color:var(--dim); font-size:13px; margin-left:auto}
+#speed{background:#21262d; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 6px}
+.help{color:var(--dimmer); font-size:12px; width:100%}
+kbd{background:#21262d; border:1px solid var(--border); border-bottom-width:2px; border-radius:4px; padding:0 5px; font-size:12px}
+
+#main{display:grid; grid-template-columns:420px minmax(420px,1fr) 480px; gap:8px; padding:8px; min-height:0}
+#main>div{min-height:0; overflow-y:auto; overflow-x:hidden}
+::-webkit-scrollbar{width:8px; height:8px}
+::-webkit-scrollbar-thumb{background:#30363d; border-radius:4px}
+::-webkit-scrollbar-track{background:transparent}
+
+.panel{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px; margin-bottom:8px}
+.panel h3{font-size:13px; color:var(--dim); font-weight:600; margin-bottom:8px; letter-spacing:.5px}
+
+#phases{display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px}
+.chip{background:#21262d; border:1px solid var(--border); border-radius:20px; padding:3px 11px; font-size:12px; cursor:pointer; color:var(--dim)}
+.chip:hover{color:var(--text); border-color:#8b949e}
+.chip.cur{color:#fff; background:#1f6feb33; border-color:var(--hl)}
+
+.trow{display:grid; grid-template-columns:78px 1fr; gap:6px; padding:2px 6px; border-radius:4px; cursor:pointer; font-family:ui-monospace,Consolas,monospace; font-size:12.5px; border-left:2px solid transparent}
+.trow:hover{background:#21262d}
+.trow .a{color:var(--dimmer)}
+.trow.cur{background:#1f6feb2b; border-left-color:var(--hl)}
+.trow.cur .a{color:var(--hl)}
+.trow.hw{background:var(--hwbg)}
+.trow.hw.cur{background:#5c1e2e; border-left-color:#ff7b9c}
+.trow.hw .c{color:#ffb3c8}
+.phdr{margin:8px 0 3px; padding:4px 7px; font-size:12px; color:#ff7bf5; font-weight:600; background:#21262d; border-radius:4px; border-left:2px solid #ff7bf5}
+.phdr small{color:var(--dimmer); font-weight:400}
+
+#elcol{position:relative; display:flex; flex-direction:column; gap:6px}
+.elrow{border:1px solid var(--border); border-radius:6px; padding:6px 10px; display:flex; align-items:center; gap:10px; background:var(--panel2); transition:all .25s}
+.elrow .nm{font-weight:700; width:42px}
+.elrow .ds{color:var(--dim); font-size:12px; flex:1}
+.elrow .sp{font-size:11.5px; color:var(--dimmer); font-family:ui-monospace,monospace}
+.elrow[data-el="3"] .nm{color:var(--el3)} .elrow[data-el="2"] .nm{color:var(--el2)}
+.elrow[data-el="1"] .nm{color:var(--el1)} .elrow[data-el="0"] .nm{color:var(--el0)}
+.elrow.on{border-color:currentColor; box-shadow:0 0 12px -2px currentColor; background:#21262d}
+.elrow[data-el="3"].on{color:var(--el3)} .elrow[data-el="2"].on{color:var(--el2)}
+.elrow[data-el="1"].on{color:var(--el1)} .elrow[data-el="0"].on{color:var(--el0)}
+.elrow.on .ds{color:#adbac7} .elrow.on .sp{color:#8b949e}
+#secstate{font-size:12px; color:var(--dim); margin-top:2px}
+#secstate b{color:var(--el3)}
+#secstate b.ns{color:var(--sync)}
+.tbadge{
+  position:absolute; left:50%; transform:translateX(-50%); white-space:nowrap;
+  padding:2px 12px; border-radius:14px; font-size:12.5px; font-weight:600; z-index:5;
+  animation:tfade 1.3s ease forwards; pointer-events:none;
+}
+.tbadge.up{background:#5c1e2e; color:#ff8fae; border:1px solid #ff7b9c}
+.tbadge.down{background:#12233d; color:#7fb4ff; border:1px solid #58a6ff}
+@keyframes tfade{0%{opacity:0; transform:translateX(-50%) scale(.85)} 12%{opacity:1; transform:translateX(-50%) scale(1)} 80%{opacity:1} 100%{opacity:0}}
+
+#vt{display:grid; grid-template-columns:auto repeat(4,1fr); gap:4px; font-size:11.5px}
+#vt .grouph{writing-mode:vertical-rl; text-orientation:mixed; transform:rotate(180deg); color:var(--dim); font-size:11px; display:flex; align-items:center; justify-content:center; border:1px dashed var(--border); border-radius:4px; padding:2px}
+.vcell{border:1px solid var(--border); border-radius:4px; padding:4px 5px; background:var(--panel2); font-family:ui-monospace,monospace}
+.vcell .off{color:var(--dimmer)}
+.vcell .ty{color:var(--text); font-weight:600}
+.vcell .hd{color:var(--dimmer); font-size:10.5px}
+.vcell.hot{border-color:#3d5a8c}
+.vcell.hit{animation:vhit 1s ease}
+@keyframes vhit{0%,100%{background:var(--panel2)} 15%{background:#8c2f45; box-shadow:0 0 10px #ff464688}}
+
+#descbox .code{font-family:ui-monospace,monospace; font-size:13.5px; color:#fff; background:#21262d; padding:6px 10px; border-radius:6px; margin-bottom:8px; border-left:3px solid var(--hl)}
+#descbox.hwstep .code{border-left-color:#ff7b9c; color:#ffb3c8}
+#descbox .loc{color:var(--dimmer); font-size:12px; margin-bottom:6px}
+#descbox .d{color:#adbac7; font-size:13.5px; margin-bottom:8px}
+#writes{font-family:ui-monospace,monospace; font-size:12px; color:var(--dim); background:#0d1117; border:1px solid var(--border); border-radius:6px; padding:6px 10px}
+#writes div{padding:1px 0}
+#writes b{color:var(--el1); font-weight:400}
+
+.reggrid{display:grid; grid-template-columns:repeat(2,1fr); gap:3px 10px; font-family:ui-monospace,monospace; font-size:12.5px}
+.rrow{display:flex; justify-content:space-between; gap:6px; border-radius:3px; padding:1px 4px}
+.rrow .n{color:var(--dim)}
+.rrow .v{color:var(--text); white-space:nowrap}
+.rrow .v.na{color:var(--dimmer)}
+.rrow.chg{background:#1f6feb33}
+.rrow.chg .v{color:var(--hl)}
+#topstate{display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:8px}
+.ts{background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:5px 8px; font-family:ui-monospace,monospace; font-size:12.5px}
+.ts .lbl{color:var(--dimmer); font-size:10.5px}
+.ts .val{font-size:14px; margin-top:1px}
+.ts.chg{border-color:var(--hl)} .ts.chg .val{color:var(--hl)}
+#daifl span{padding:0 2px; color:var(--dimmer)}
+#daifl span.m{color:var(--irq); font-weight:700}
+#xregs{display:grid; grid-template-columns:repeat(3,1fr); gap:2px 8px; font-family:ui-monospace,monospace; font-size:11.5px}
+#spgrid{margin-bottom:8px}
+
+#bfpanel .bfhead{display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap}
+#bfselect{background:#21262d; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 7px; font-size:13px}
+.bfauto{font-size:12px; color:var(--dim); display:flex; align-items:center; gap:4px; cursor:pointer; user-select:none}
+#bfvalue{font-size:13.5px; color:#fff; margin-bottom:6px; font-family:ui-monospace,monospace}
+#bfvalue .bfc{color:var(--el1)}
+#bfchg{font-family:ui-monospace,monospace; font-size:12px; color:#ff8fae; margin-bottom:6px; line-height:1.5}
+#bfwrap{overflow-x:auto; padding-bottom:4px}
+.bfrow{display:flex; gap:2px; margin-bottom:3px}
+.bfgrid{display:grid; grid-template-columns:repeat(28, minmax(23px,1fr)); gap:2px; margin-bottom:3px}
+.bcell{border:1px solid var(--border); border-radius:3px; background:var(--panel2); text-align:center; padding:2px 1px; min-width:0; overflow:hidden; line-height:1.3}
+.bcell .bn{font-size:9px; color:var(--dimmer); font-family:ui-monospace,monospace}
+.bcell .bfn{font-size:10.5px; font-weight:600; color:var(--text)}
+.bcell.res .bfn{color:var(--dimmer); font-weight:400}
+.bcell .bv{font-size:10px; color:var(--dim); font-family:ui-monospace,monospace}
+.bcell.set{background:#0f2d1a; border-color:#2ea043}
+.bcell.set .bv{color:var(--el0)}
+.bcell.alt{opacity:.72}
+.bcell.flip{animation:bitflip 1.1s ease}
+@keyframes bitflip{0%,100%{} 12%{background:#5c1e2e; border-color:#ff7b9c; box-shadow:0 0 8px #ff464666}}
+.bflbl{font-size:10.5px; color:var(--dimmer); margin:5px 0 2px}
+#bfdecode{margin-top:8px; border-top:1px dashed var(--border); padding-top:6px; max-height:250px; overflow-y:auto}
+.bde{display:grid; grid-template-columns:88px 62px 84px 1fr; gap:6px; font-size:12px; padding:1.5px 4px; font-family:ui-monospace,monospace; border-radius:3px}
+.bde .n{color:var(--el1)}
+.bde .b{color:var(--dimmer)}
+.bde .v{color:var(--text)}
+.bde .m{color:var(--dim); font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.bde.chg{background:#5c1e2e55}
+.bde.chg .v{color:#ff8fae}
+.rrow.bf{cursor:pointer}
+.rrow.bf:hover{background:#21262d}
+.rrow.bf .n{border-bottom:1px dotted var(--hl)}
+
+#console{margin:0 8px 8px; background:#0a0d12; border:1px solid var(--border); border-radius:8px; overflow-y:auto; padding:8px 12px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:13px; line-height:1.6}
+.cl{white-space:pre; min-height:17px}
+.cl .tag{display:inline-block; min-width:8ch}
+.c-el0{color:var(--el0)} .c-el1{color:var(--el1)} .c-el2{color:var(--el2)} .c-el3{color:var(--el3)}
+.c-sync{color:var(--sync)} .c-async{color:var(--async)} .c-irq{color:var(--irq)} .c-ok{color:var(--ok); font-weight:600}
+.c-reg{color:#7d8a99} .c-ret{color:#7d8a99} .c-warn{color:#ffb929} .c-info{color:var(--el1)}
+.cl.banner{color:var(--sync); font-weight:700}
+.cl.step{color:#ff7bf5; font-weight:700}
+.cl.test{color:var(--el1); font-weight:700}
+.cl.kv .kk{display:inline-block; min-width:18ch; color:#fff; font-weight:700}
+.cl.kv{color:#c9d1d9}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AArch64 异常模型 · 单步可视化<small>EL0–EL3 · 同步/异步异常 · 数据取自 kernel.elf 反汇编与 QEMU 实跑</small></h1>
+  <button class="btn" id="breset">重置</button>
+  <button class="btn" id="bprev">上一步</button>
+  <button class="btn" id="bnext">下一步</button>
+  <button class="btn primary" id="bplay">自动运行</button>
+  <select id="speed">
+    <option value="900">慢速</option>
+    <option value="400" selected>中速</option>
+    <option value="140">快速</option>
+    <option value="45">极速</option>
+  </select>
+  <span id="prog">步骤 0/0</span>
+  <span class="help">快捷键：<kbd>Space</kbd> 运行/暂停 · <kbd>→</kbd> 单步 · <kbd>←</kbd> 回退 · <kbd>R</kbd> 重置 · 点击左侧任意指令行可跳转</span>
+</header>
+
+<div id="main">
+  <div id="left">
+    <div id="phases"></div>
+    <div class="panel" style="padding:6px">
+      <h3 style="padding:0 6px">执行轨迹（PC · 指令）</h3>
+      <div id="trace"></div>
+    </div>
+  </div>
+
+  <div id="mid">
+    <div class="panel">
+      <h3>异常级别（当前执行位置）</h3>
+      <div id="elcol">
+        <div class="elrow" data-el="3"><span class="nm">EL3</span><span class="ds">Secure Monitor（固件）</span><span class="sp" id="sp3">SP_EL3</span></div>
+        <div class="elrow" data-el="2"><span class="nm">EL2</span><span class="ds">Hypervisor（虚拟化监控）</span><span class="sp" id="sp2">SP_EL2</span></div>
+        <div class="elrow" data-el="1"><span class="nm">EL1</span><span class="ds">内核（Kernel）</span><span class="sp" id="sp1">SP_EL1</span></div>
+        <div class="elrow" data-el="0"><span class="nm">EL0</span><span class="ds">应用（User）</span><span class="sp" id="sp0">SP_EL0</span></div>
+      </div>
+      <div id="secstate">安全状态：<b id="secv">Secure</b> · 模式 <span class="mono" id="modev">EL3h</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>向量表（VBAR_ELx = 0x40000800，三级共用）</h3>
+      <div id="vt"></div>
+    </div>
+
+    <div class="panel" id="bfpanel">
+      <h3>位域视图（点击右侧带虚线的寄存器名可切换）</h3>
+      <div class="bfhead">
+        <select id="bfselect"></select>
+        <label class="bfauto"><input type="checkbox" id="bfauto" checked> 跟随寄存器变化</label>
+      </div>
+      <div id="bfvalue">—</div>
+      <div id="bfchg"></div>
+      <div id="bfwrap"></div>
+      <div id="bfdecode"></div>
+    </div>
+
+    <div class="panel" id="descpanel">
+      <h3>当前步骤</h3>
+      <div id="descbox">
+        <div class="loc" id="dloc"></div>
+        <div class="code" id="dcode"></div>
+        <div class="d" id="ddesc"></div>
+        <div id="writes"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="right">
+    <div class="panel">
+      <h3>核心状态</h3>
+      <div id="topstate">
+        <div class="ts" id="ts-pc"><div class="lbl">PC</div><div class="val" id="v-pc">—</div></div>
+        <div class="ts" id="ts-el"><div class="lbl">当前 EL</div><div class="val" id="v-el">—</div></div>
+        <div class="ts" id="ts-daif"><div class="lbl">PSTATE.DAIF</div><div class="val" id="daifl">—</div></div>
+      </div>
+      <div class="reggrid" id="spgrid">
+        <div class="rrow" id="r-sp"><span class="n">SP（当前）</span><span class="v">—</span></div>
+        <div class="rrow" id="r-spel0"><span class="n">SP_EL0</span><span class="v">—</span></div>
+        <div class="rrow" id="r-spel1"><span class="n">SP_EL1</span><span class="v">—</span></div>
+        <div class="rrow" id="r-spel2"><span class="n">SP_EL2</span><span class="v">—</span></div>
+        <div class="rrow" id="r-spel3"><span class="n">SP_EL3</span><span class="v">—</span></div>
+        <div class="rrow" id="r-x19"><span class="n">X19（向量表）</span><span class="v">—</span></div>
+      </div>
+      <h3 style="margin-top:6px">通用寄存器 X0–X30</h3>
+      <div id="xregs"></div>
+    </div>
+
+    <div class="panel" id="sysregs"></div>
+  </div>
+</div>
+
+<div id="console"></div>
+
+<script>
+"use strict";
+
+const A = {
+  start:0x40000000, el3:0x4000002c, el2:0x40000060, el1:0x4000008c, el0:0x400000c0,
+  vt:0x40000800, sync:0x40001000, irqh:0x400010f0,
+  banner:0x40001810, el3r:0x40001890, el2r:0x40001910, el1r:0x40001990, el3s:0x40001a10,
+  disp:0x40001a90, irqc:0x40001ea0, main:0x40002100,
+  sp3:0x40004080, sp2:0x40005080, sp1:0x40006080, sp0:0x40007080
+};
+
+const PHASES = [
+  {name:"复位与判级", hint:"QEMU 上电 → EL3"},
+  {name:"EL3 引导降级", hint:"SCR/VBAR/SP，ERET→EL2"},
+  {name:"EL2 引导降级", hint:"HCR/VBAR/SP，ERET→EL1"},
+  {name:"EL1 引导降级", hint:"设 EL0 栈，ERET→EL0"},
+  {name:"SVC 系统调用", hint:"EL0→EL1 简单往返"},
+  {name:"SVC/HVC/SMC 链条", hint:"EL0→EL1→EL2→EL3→回"},
+  {name:"BRK 调试异常", hint:"ELR 指向指令本身，需 +4"},
+  {name:"UDF 无效指令", hint:"EC=0x00，ELR+4"},
+  {name:"IRQ 定时器中断", hint:"异步抢占 EL0"},
+  {name:"结束", hint:"WFE 挂起"}
+];
+
+const L = {
+  blank:()=>({k:"blank"}),
+  banner:t=>({k:"banner", t}),
+  kv:(k,v)=>({k:"kv", key:k, val:v}),
+  step:(n,tt,t)=>({k:"step", t:"[STEP "+n+"/"+tt+"] "+t}),
+  test:t=>({k:"test", t:"---------- "+t+" ----------"}),
+  ln:(tag,t)=>({k:"ln", tag, t})
+};
+
+const STEPS = [];
+function S(o){ STEPS.push(Object.assign({w:{}, logs:[], hw:false}, o)); }
+

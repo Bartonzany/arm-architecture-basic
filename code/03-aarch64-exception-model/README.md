@@ -19,6 +19,8 @@
 03-aarch64-exception-model/
 ├── README.md                # 本文件（入口 + 导航）
 ├── docs/exception-notes.md  # ★ 概念全解 + 概念↔代码映射 + 汇编对照
+├── docs/exception-visualizer.html  # ★ 单步可视化（构建产物，浏览器打开）
+├── docs/visualizer-src/     #   可视化源码（布局 CSS / 步骤数据 / 位域引擎）
 ├── src/
 │   └── bare-metal/          # 唯一代码文件夹（源码 + Makefile）
 │       ├── boot.S           #   EL3 -> EL2 -> EL1 -> EL0 降级引导
@@ -26,7 +28,9 @@
 │       ├── main.c           #   各级别报告 + 同步/异步异常演示
 │       ├── linker.ld        #   链接脚本（4 个独立栈）
 │       └── Makefile
-├── scripts/build_all.sh
+├── scripts/build_all.sh     # 裸机编译 + 反汇编
+├── scripts/build_visualizer.sh  # 拼装 visualizer-src/ -> 可视化 HTML + 自检
+├── scripts/test_visualizer.js   # 无浏览器 headless 自检（node 运行）
 └── build/                   # 产物（gitignore）
 ```
 
@@ -36,9 +40,10 @@
 make -C src/bare-metal build    # 编译（产物进 build/bare-metal/）
 make -C src/bare-metal run      # qemu 运行（程序末尾死循环，按 Ctrl-C 退出）
 ./scripts/build_all.sh          # 一键构建 + 反汇编
+./scripts/build_visualizer.sh   # 重新生成单步可视化页面（源码在 docs/visualizer-src/）
 ```
 
-依赖：`aarch64-linux-gnu-gcc`、`qemu-system-aarch64`（`apt install gcc-aarch64-linux-gnu qemu-system-arm`）。
+依赖：`aarch64-linux-gnu-gcc`、`qemu-system-aarch64`（`apt install gcc-aarch64-linux-gnu qemu-system-arm`）；可视化构建额外需要 `node`（仅语法/行为自检用，页面本身无依赖）。
 
 运行要点：`-machine virt,secure=on,virtualization=on` 使 CPU 实现 EL3/EL2 并复位
 进入 EL3；裸机从 EL3 开始逐级降级，最终在 EL0 完成各异常演示。
@@ -48,4 +53,5 @@ make -C src/bare-metal run      # qemu 运行（程序末尾死循环，按 Ctrl
 | 想了解 | 看这里 |
 |--------|--------|
 | 概念全解 + 概念↔代码映射 + 汇编对照 | [`docs/exception-notes.md`](docs/exception-notes.md) |
+| 单步可视化（寄存器 / EL 切换 / 向量表 / 串口输出 / 位域图） | [`docs/exception-visualizer.html`](docs/exception-visualizer.html)（浏览器直接打开） |
 | 源码 | [`src/bare-metal/`](src/bare-metal/) |

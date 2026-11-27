@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AArch64 异常模型可视化 — 单步执行模拟器</title>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c2129; --border:#30363d;
+  --text:#c9d1d9; --dim:#8b949e; --dimmer:#6e7681;
+  --el0:#2ee65a; --el1:#00d2ff; --el2:#ff5aff; --el3:#ffcd00;
+  --sync:#4696ff; --async:#ff9600; --irq:#ff4646; --ok:#32ff32;
+  --hl:#58a6ff; --hwbg:#2d1e2e;
+}
+*{box-sizing:border-box; margin:0; padding:0}
+body{
+  background:var(--bg); color:var(--text);
+  font:14px/1.5 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  height:100vh; display:grid; grid-template-rows:auto minmax(0,1fr) 232px; overflow:hidden;
+}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+
+header{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  padding:8px 12px; border-bottom:1px solid var(--border); background:var(--panel);
+}
+header h1{font-size:16px; font-weight:600; margin-right:6px}
+header h1 small{color:var(--dim); font-weight:400; font-size:12px; margin-left:8px}
+.btn{
+  background:#21262d; color:var(--text); border:1px solid var(--border); border-radius:6px;
+  padding:5px 14px; cursor:pointer; font-size:13px;
+}
+.btn:hover{background:#30363d; border-color:#8b949e}
+.btn.primary{background:#1f6feb; border-color:#1f6feb; color:#fff}
+.btn.primary:hover{background:#388bfd}
+#prog{color:var(--dim); font-size:13px; margin-left:auto}
+#speed{background:#21262d; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 6px}
+.help{color:var(--dimmer); font-size:12px; width:100%}
+kbd{background:#21262d; border:1px solid var(--border); border-bottom-width:2px; border-radius:4px; padding:0 5px; font-size:12px}
+
+#main{display:grid; grid-template-columns:420px minmax(420px,1fr) 480px; gap:8px; padding:8px; min-height:0}
+#main>div{min-height:0; overflow-y:auto; overflow-x:hidden}
+::-webkit-scrollbar{width:8px; height:8px}
+::-webkit-scrollbar-thumb{background:#30363d; border-radius:4px}
+::-webkit-scrollbar-track{background:transparent}
+
+.panel{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px; margin-bottom:8px}
+.panel h3{font-size:13px; color:var(--dim); font-weight:600; margin-bottom:8px; letter-spacing:.5px}
+
+#phases{display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px}
+.chip{background:#21262d; border:1px solid var(--border); border-radius:20px; padding:3px 11px; font-size:12px; cursor:pointer; color:var(--dim)}
+.chip:hover{color:var(--text); border-color:#8b949e}
+.chip.cur{color:#fff; background:#1f6feb33; border-color:var(--hl)}
+
+.trow{display:grid; grid-template-columns:78px 1fr; gap:6px; padding:2px 6px; border-radius:4px; cursor:pointer; font-family:ui-monospace,Consolas,monospace; font-size:12.5px; border-left:2px solid transparent}
+.trow:hover{background:#21262d}
+.trow .a{color:var(--dimmer)}
+.trow.cur{background:#1f6feb2b; border-left-color:var(--hl)}
+.trow.cur .a{color:var(--hl)}
+.trow.hw{background:var(--hwbg)}
+.trow.hw.cur{background:#5c1e2e; border-left-color:#ff7b9c}
+.trow.hw .c{color:#ffb3c8}
+.phdr{margin:8px 0 3px; padding:4px 7px; font-size:12px; color:#ff7bf5; font-weight:600; background:#21262d; border-radius:4px; border-left:2px solid #ff7bf5}
+.phdr small{color:var(--dimmer); font-weight:400}
+
+#elcol{position:relative; display:flex; flex-direction:column; gap:6px}
+.elrow{border:1px solid var(--border); border-radius:6px; padding:6px 10px; display:flex; align-items:center; gap:10px; background:var(--panel2); transition:all .25s}
+.elrow .nm{font-weight:700; width:42px}
+.elrow .ds{color:var(--dim); font-size:12px; flex:1}
+.elrow .sp{font-size:11.5px; color:var(--dimmer); font-family:ui-monospace,monospace}
+.elrow[data-el="3"] .nm{color:var(--el3)} .elrow[data-el="2"] .nm{color:var(--el2)}
+.elrow[data-el="1"] .nm{color:var(--el1)} .elrow[data-el="0"] .nm{color:var(--el0)}
+.elrow.on{border-color:currentColor; box-shadow:0 0 12px -2px currentColor; background:#21262d}
+.elrow[data-el="3"].on{color:var(--el3)} .elrow[data-el="2"].on{color:var(--el2)}
+.elrow[data-el="1"].on{color:var(--el1)} .elrow[data-el="0"].on{color:var(--el0)}
+.elrow.on .ds{color:#adbac7} .elrow.on .sp{color:#8b949e}
+#secstate{font-size:12px; color:var(--dim); margin-top:2px}
+#secstate b{color:var(--el3)}
+#secstate b.ns{color:var(--sync)}
+.tbadge{
+  position:absolute; left:50%; transform:translateX(-50%); white-space:nowrap;
+  padding:2px 12px; border-radius:14px; font-size:12.5px; font-weight:600; z-index:5;
+  animation:tfade 1.3s ease forwards; pointer-events:none;
+}
+.tbadge.up{background:#5c1e2e; color:#ff8fae; border:1px solid #ff7b9c}
+.tbadge.down{background:#12233d; color:#7fb4ff; border:1px solid #58a6ff}
+@keyframes tfade{0%{opacity:0; transform:translateX(-50%) scale(.85)} 12%{opacity:1; transform:translateX(-50%) scale(1)} 80%{opacity:1} 100%{opacity:0}}
+
+#vt{display:grid; grid-template-columns:auto repeat(4,1fr); gap:4px; font-size:11.5px}
+#vt .grouph{writing-mode:vertical-rl; text-orientation:mixed; transform:rotate(180deg); color:var(--dim); font-size:11px; display:flex; align-items:center; justify-content:center; border:1px dashed var(--border); border-radius:4px; padding:2px}
+.vcell{border:1px solid var(--border); border-radius:4px; padding:4px 5px; background:var(--panel2); font-family:ui-monospace,monospace}
+.vcell .off{color:var(--dimmer)}
+.vcell .ty{color:var(--text); font-weight:600}
+.vcell .hd{color:var(--dimmer); font-size:10.5px}
+.vcell.hot{border-color:#3d5a8c}
+.vcell.hit{animation:vhit 1s ease}
+@keyframes vhit{0%,100%{background:var(--panel2)} 15%{background:#8c2f45; box-shadow:0 0 10px #ff464688}}
+
+#descbox .code{font-family:ui-monospace,monospace; font-size:13.5px; color:#fff; background:#21262d; padding:6px 10px; border-radius:6px; margin-bottom:8px; border-left:3px solid var(--hl)}
+#descbox.hwstep .code{border-left-color:#ff7b9c; color:#ffb3c8}
+#descbox .loc{color:var(--dimmer); font-size:12px; margin-bottom:6px}
+#descbox .d{color:#adbac7; font-size:13.5px; margin-bottom:8px}
+#writes{font-family:ui-monospace,monospace; font-size:12px; color:var(--dim); background:#0d1117; border:1px solid var(--border); border-radius:6px; padding:6px 10px}
+#writes div{padding:1px 0}
+#writes b{color:var(--el1); font-weight:400}
+
+.reggrid{display:grid; grid-template-columns:repeat(2,1fr); gap:3px 10px; font-family:ui-monospace,monospace; font-size:12.5px}
+.rrow{display:flex; justify-content:space-between; gap:6px; border-radius:3px; padding:1px 4px}
+.rrow .n{color:var(--dim)}
+.rrow .v{color:var(--text); white-space:nowrap}
+.rrow .v.na{color:var(--dimmer)}
+.rrow.chg{background:#1f6feb33}
+.rrow.chg .v{color:var(--hl)}
+#topstate{display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:8px}
+.ts{background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:5px 8px; font-family:ui-monospace,monospace; font-size:12.5px}
+.ts .lbl{color:var(--dimmer); font-size:10.5px}
+.ts .val{font-size:14px; margin-top:1px}
+.ts.chg{border-color:var(--hl)} .ts.chg .val{color:var(--hl)}
+#daifl span{padding:0 2px; color:var(--dimmer)}
+#daifl span.m{color:var(--irq); font-weight:700}
+#xregs{display:grid; grid-template-columns:repeat(3,1fr); gap:2px 8px; font-family:ui-monospace,monospace; font-size:11.5px}
+#spgrid{margin-bottom:8px}
+
+#bfpanel .bfhead{display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap}
+#bfselect{background:#21262d; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 7px; font-size:13px}
+.bfauto{font-size:12px; color:var(--dim); display:flex; align-items:center; gap:4px; cursor:pointer; user-select:none}
+#bfvalue{font-size:13.5px; color:#fff; margin-bottom:6px; font-family:ui-monospace,monospace}
+#bfvalue .bfc{color:var(--el1)}
+#bfchg{font-family:ui-monospace,monospace; font-size:12px; color:#ff8fae; margin-bottom:6px; line-height:1.5}
+#bfwrap{overflow-x:auto; padding-bottom:4px}
+.bfrow{display:flex; gap:2px; margin-bottom:3px}
+.bfgrid{display:grid; grid-template-columns:repeat(28, minmax(23px,1fr)); gap:2px; margin-bottom:3px}
+.bcell{border:1px solid var(--border); border-radius:3px; background:var(--panel2); text-align:center; padding:2px 1px; min-width:0; overflow:hidden; line-height:1.3}
+.bcell .bn{font-size:9px; color:var(--dimmer); font-family:ui-monospace,monospace}
+.bcell .bfn{font-size:10.5px; font-weight:600; color:var(--text)}
+.bcell.res .bfn{color:var(--dimmer); font-weight:400}
+.bcell .bv{font-size:10px; color:var(--dim); font-family:ui-monospace,monospace}
+.bcell.set{background:#0f2d1a; border-color:#2ea043}
+.bcell.set .bv{color:var(--el0)}
+.bcell.alt{opacity:.72}
+.bcell.flip{animation:bitflip 1.1s ease}
+@keyframes bitflip{0%,100%{} 12%{background:#5c1e2e; border-color:#ff7b9c; box-shadow:0 0 8px #ff464666}}
+.bflbl{font-size:10.5px; color:var(--dimmer); margin:5px 0 2px}
+#bfdecode{margin-top:8px; border-top:1px dashed var(--border); padding-top:6px; max-height:250px; overflow-y:auto}
+.bde{display:grid; grid-template-columns:88px 62px 84px 1fr; gap:6px; font-size:12px; padding:1.5px 4px; font-family:ui-monospace,monospace; border-radius:3px}
+.bde .n{color:var(--el1)}
+.bde .b{color:var(--dimmer)}
+.bde .v{color:var(--text)}
+.bde .m{color:var(--dim); font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.bde.chg{background:#5c1e2e55}
+.bde.chg .v{color:#ff8fae}
+.rrow.bf{cursor:pointer}
+.rrow.bf:hover{background:#21262d}
+.rrow.bf .n{border-bottom:1px dotted var(--hl)}
+
+#console{margin:0 8px 8px; background:#0a0d12; border:1px solid var(--border); border-radius:8px; overflow-y:auto; padding:8px 12px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:13px; line-height:1.6}
+.cl{white-space:pre; min-height:17px}
+.cl .tag{display:inline-block; min-width:8ch}
+.c-el0{color:var(--el0)} .c-el1{color:var(--el1)} .c-el2{color:var(--el2)} .c-el3{color:var(--el3)}
+.c-sync{color:var(--sync)} .c-async{color:var(--async)} .c-irq{color:var(--irq)} .c-ok{color:var(--ok); font-weight:600}
+.c-reg{color:#7d8a99} .c-ret{color:#7d8a99} .c-warn{color:#ffb929} .c-info{color:var(--el1)}
+.cl.banner{color:var(--sync); font-weight:700}
+.cl.step{color:#ff7bf5; font-weight:700}
+.cl.test{color:var(--el1); font-weight:700}
+.cl.kv .kk{display:inline-block; min-width:18ch; color:#fff; font-weight:700}
+.cl.kv{color:#c9d1d9}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AArch64 异常模型 · 单步可视化<small>EL0–EL3 · 同步/异步异常 · 数据取自 kernel.elf 反汇编与 QEMU 实跑</small></h1>
+  <button class="btn" id="breset">重置</button>
+  <button class="btn" id="bprev">上一步</button>
+  <button class="btn" id="bnext">下一步</button>
+  <button class="btn primary" id="bplay">自动运行</button>
+  <select id="speed">
+    <option value="900">慢速</option>
+    <option value="400" selected>中速</option>
+    <option value="140">快速</option>
+    <option value="45">极速</option>
+  </select>
+  <span id="prog">步骤 0/0</span>
+  <span class="help">快捷键：<kbd>Space</kbd> 运行/暂停 · <kbd>→</kbd> 单步 · <kbd>←</kbd> 回退 · <kbd>R</kbd> 重置 · 点击左侧任意指令行可跳转</span>
+</header>
+
+<div id="main">
+  <div id="left">
+    <div id="phases"></div>
+    <div class="panel" style="padding:6px">
+      <h3 style="padding:0 6px">执行轨迹（PC · 指令）</h3>
+      <div id="trace"></div>
+    </div>
+  </div>
+
+  <div id="mid">
+    <div class="panel">
+      <h3>异常级别（当前执行位置）</h3>
+      <div id="elcol">
+        <div class="elrow" data-el="3"><span class="nm">EL3</span><span class="ds">Secure Monitor（固件）</span><span class="sp" id="sp3">SP_EL3</span></div>
+        <div class="elrow" data-el="2"><span class="nm">EL2</span><span class="ds">Hypervisor（虚拟化监控）</span><span class="sp" id="sp2">SP_EL2</span></div>
+        <div class="elrow" data-el="1"><span class="nm">EL1</span><span class="ds">内核（Kernel）</span><span class="sp" id="sp1">SP_EL1</span></div>
+        <div class="elrow" data-el="0"><span class="nm">EL0</span><span class="ds">应用（User）</span><span class="sp" id="sp0">SP_EL0</span></div>
+      </div>
+      <div id="secstate">安全状态：<b id="secv">Secure</b> · 模式 <span class="mono" id="modev">EL3h</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>向量表（VBAR_ELx = 0x40000800，三级共用）</h3>
+      <div id="vt"></div>
+    </div>
+
+    <div class="panel" id="bfpanel">
+      <h3>位域视图（点击右侧带虚线的寄存器名可切换）</h3>
+      <div class="bfhead">
+        <select id="bfselect"></select>
+        <label class="bfauto"><input type="checkbox" id="bfauto" checked> 跟随寄存器变化</label>
+      </div>
+      <div id="bfvalue">—</div>
+      <div id="bfchg"></div>
+      <div id="bfwrap"></div>
+      <div id="bfdecode"></div>
+    </div>
+
+    <div class="panel" id="descpanel">
+      <h3>当前步骤</h3>
+      <div id="descbox">
+        <div class="loc" id="dloc"></div>
+        <div class="code" id="dcode"></div>
+        <div class="d" id="ddesc"></div>
+        <div id="writes"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="right">
+    <div class="panel">
+      <h3>核心状态</h3>
+      <div id="topstate">
+        <div class="ts" id="ts-pc"><div class="lbl">PC</div><div class="val" id="v-pc">—</div></div>
+        <div class="ts" id="ts-el"><div class="lbl">当前 EL</div><div class="val" id="v-el">—</div></div>
+        <div class="ts" id="ts-daif"><div class="lbl">PSTATE.DAIF</div><div class="val" id="daifl">—</div></div>
+      </div>
+      <div class="reggrid" id="spgrid">
+        <div class="rrow" id="r-sp"><span class="n">SP（当前）</span><span class="v">—</span></div>
+        <div class="rrow" id="r-spel0"><span class="n">SP_EL0</span><span class="v">—</span></div>
+        <div class="rrow" id="r-spel1"><span class="n">SP_EL1</span><span class="v">—</span></div>
+        <div class="rrow" id="r-spel2"><span class="n">SP_EL2</span><span class="v">—</span></div>
+        <div class="rrow" id="r-spel3"><span class="n">SP_EL3</span><span class="v">—</span></div>
+        <div class="rrow" id="r-x19"><span class="n">X19（向量表）</span><span class="v">—</span></div>
+      </div>
+      <h3 style="margin-top:6px">通用寄存器 X0–X30</h3>
+      <div id="xregs"></div>
+    </div>
+
+    <div class="panel" id="sysregs"></div>
+  </div>
+</div>
+
+<div id="console"></div>
+
+<script>
+"use strict";
+
+const A = {
+  start:0x40000000, el3:0x4000002c, el2:0x40000060, el1:0x4000008c, el0:0x400000c0,
+  vt:0x40000800, sync:0x40001000, irqh:0x400010f0,
+  banner:0x40001810, el3r:0x40001890, el2r:0x40001910, el1r:0x40001990, el3s:0x40001a10,
+  disp:0x40001a90, irqc:0x40001ea0, main:0x40002100,
+  sp3:0x40004080, sp2:0x40005080, sp1:0x40006080, sp0:0x40007080
+};
+
+const PHASES = [
+  {name:"复位与判级", hint:"QEMU 上电 → EL3"},
+  {name:"EL3 引导降级", hint:"SCR/VBAR/SP，ERET→EL2"},
+  {name:"EL2 引导降级", hint:"HCR/VBAR/SP，ERET→EL1"},
+  {name:"EL1 引导降级", hint:"设 EL0 栈，ERET→EL0"},
+  {name:"SVC 系统调用", hint:"EL0→EL1 简单往返"},
+  {name:"SVC/HVC/SMC 链条", hint:"EL0→EL1→EL2→EL3→回"},
+  {name:"BRK 调试异常", hint:"ELR 指向指令本身，需 +4"},
+  {name:"UDF 无效指令", hint:"EC=0x00，ELR+4"},
+  {name:"IRQ 定时器中断", hint:"异步抢占 EL0"},
+  {name:"结束", hint:"WFE 挂起"}
+];
+
+const L = {
+  blank:()=>({k:"blank"}),
+  banner:t=>({k:"banner", t}),
+  kv:(k,v)=>({k:"kv", key:k, val:v}),
+  step:(n,tt,t)=>({k:"step", t:"[STEP "+n+"/"+tt+"] "+t}),
+  test:t=>({k:"test", t:"---------- "+t+" ----------"}),
+  ln:(tag,t)=>({k:"ln", tag, t})
+};
+
+const STEPS = [];
+function S(o){ STEPS.push(Object.assign({w:{}, logs:[], hw:false}, o)); }
+
+S({ph:0, pc:A.start, hw:true, code:"— RESET —", loc:"QEMU 复位", desc:"QEMU virt（secure=on, virtualization=on）上电：CPU 从 0x40000000 取第一条指令，复位进入最高级别 EL3（Secure），PSTATE=EL3h、DAIF 全屏蔽。", to:{pc:A.start, el:3, mode:"EL3h", daif:15, secure:true, sp:0}, ev:{kind:"reset"}});
+S({ph:0, pc:A.start, code:"ldr x19, =vector_table", loc:"boot.S:27 _start", desc:"把向量表地址存进 X19。PCS 规定 X19–X28 是被调用者保存寄存器，跨 bl 调用不丢失，后面每级都用它设 VBAR_ELx。", w:{x19:0x40000800}});
+S({ph:0, pc:A.start+4, code:"mrs x0, currentel", loc:"boot.S:30", desc:"读当前异常级别：CurrentEL 的 bits[3:2]，EL3 → 0b1100。", w:{x0:0xC}});
+S({ph:0, pc:A.start+8, code:"lsr x0, x0, #2", loc:"boot.S:31", desc:"右移 2 位取出级别数值。", w:{x0:3}});
+S({ph:0, pc:A.start+12, code:"and x0, x0, #3", loc:"boot.S:32", desc:"清掉高位，X0=3：当前在 EL3。", w:{x0:3}});
+S({ph:0, pc:A.start+16, code:"cmp x0, #3; b.eq start_el3", loc:"boot.S:34", desc:"复位 EL=3，跳到 start_el3 分支（代码对 EL2/EL1 复位也做了分支，本场景走 EL3）。", to:{pc:A.el3}});
+
+S({ph:1, pc:A.el3, code:"msr vbar_el3, x19", loc:"boot.S:46 start_el3", desc:"设置 EL3 向量表基址。本示例三级共用同一张表：VBAR_EL1 = VBAR_EL2 = VBAR_EL3 = vector_table。", w:{vbar_el3:0x40000800}});
+S({ph:1, pc:A.el3+4, code:"ldr x2, =_stack_top_el3; mov sp, x2", loc:"boot.S:47-48", desc:"设置 EL3 栈。EL3 恒用 SP_EL3（即当前 sp）。每个 EL 有独立 4KB 栈，互不覆盖。", w:{x2:0x40004080, spEl3:0x40004080, sp:0x40004080}});
+S({ph:1, pc:A.el3+12, code:"mov x2, #((1<<0)|(1<<8)|(1<<10))", loc:"boot.S:56", desc:"组装 SCR_EL3 的值：NS=1（下一级进 Non-secure）、HCE=1（允许 HVC）、RW=1（下一级 AArch64）。", w:{x2:0x501}});
+S({ph:1, pc:A.el3+16, code:"msr scr_el3, x2", loc:"boot.S:57", desc:"写入 0x501；读回 0x531（bit4/bit5 为 QEMU 复位默认位）。SCR_EL3 决定 ERET 后的安全状态与执行态。", w:{scr_el3:0x531}});
+S({ph:1, pc:A.el3+20, code:"mov x2, #0x3c9; msr spsr_el3, x2", loc:"boot.S:59-60", desc:"SPSR_EL3 = 0x3C9：目标状态 EL2h + DAIF 全屏蔽。ERET 时它会被整体装入 PSTATE。", w:{x2:0x3C9, spsr_el3:0x3C9}});
+S({ph:1, pc:A.el3+24, code:"ldr x2, =start_el2; msr elr_el3, x2", loc:"boot.S:61-62", desc:"ELR_EL3 = 0x40000060：ERET 的返回地址，即 EL2 代码入口。", w:{x2:0x40000060, elr_el3:0x40000060}});
+S({ph:1, pc:A.el3+36, code:"bl startup_banner", loc:"boot.S:64 → main.c:248", desc:"打印启动横幅与基本信息（C 函数，经 PL011 串口输出）。bl 把返回地址写入 X30（LR）。", to:{pc:0x40000054}, w:{x30:0x40000054}, logs:[
+  L.blank(), L.banner("========== AArch64 异常模型验证 启动 =========="), L.blank(),
+  L.kv("CPU:", "cortex-a53"),
+  L.kv("Machine:", "virt (secure=on, virtualization=on)"),
+  L.kv("Levels:", "EL0 - EL3"),
+  L.kv("Tests:", "5 项（SVC / 链条 / BRK / UDF / IRQ）"),
+  L.blank(), L.step(1,2,"引导降级 EL3 -> EL2 -> EL1 -> EL0")
+]});
+S({ph:1, pc:A.el3+40, code:"bl el3_report", loc:"boot.S:65 → main.c:259", desc:"报告 EL3 级别：打印 SCR_EL3 与 VBAR_EL3。", to:{pc:0x40000058}, w:{x30:0x40000058}, logs:[
+  L.ln("[EL3]","当前级别 EL3（Secure 固件）"),
+  L.ln("[REG]","SCR_EL3   = 0x0000000000000531"),
+  L.ln("[REG]","VBAR_EL3  = 0x0000000040000800"),
+  L.ln("[EL3]","设 SCR_EL3(NS=1,RW=1,HCE=1)，ERET 到 EL2（切换安全状态）")
+]});
+S({ph:1, pc:A.el3+44, code:"bl el3_setup", loc:"boot.S:66 → main.c:291", desc:"Secure EL3 专属职责：GICD_IGROUPR 等是 Secure-only 寄存器，必须趁还在 Secure 时配好，降级到 Non-secure 后就写不了了。把定时器中断 PPI30 划入 Group1 并使能 GIC。", to:{pc:0x4000005c}, w:{x30:0x4000005c, gicd_igroupr:0x40000000, gicd_ctlr:3, gicd_isenabler:0x40000000, gicc_ctlr:3, gicc_pmr:0xFF}, logs:[
+  L.ln("[EL3]","GIC 已配置（PPI30 -> Group1，distributor/CPU interface 使能）")
+]});
+S({ph:1, pc:A.el3+48, code:"eret", loc:"boot.S:67", desc:"EL3 → EL2：PC←ELR_EL3，PSTATE←SPSR_EL3（EL2h）。因 SCR_EL3.NS=1，同时切换到 Non-secure 世界。异常返回只降级或同级，不升级。", to:{pc:A.el2, el:2, mode:"EL2h", daif:15, sp:0, secure:false}, ev:{kind:"eret", from:3, to:2, cause:"ERET（引导降级）"}});
+
+S({ph:2, pc:A.el2, code:"msr vbar_el2, x19", loc:"boot.S:73 start_el2", desc:"设置 EL2 向量表（同一张表）。", w:{vbar_el2:0x40000800}});
+S({ph:2, pc:A.el2+4, code:"ldr x2, =_stack_top_el2; mov sp, x2", loc:"boot.S:74-75", desc:"设置 EL2 栈 SP_EL2 = 0x40005080。", w:{x2:0x40005080, spEl2:0x40005080, sp:0x40005080}});
+S({ph:2, pc:A.el2+12, code:"mov x2, #(1 << 31)", loc:"boot.S:81", desc:"组装 HCR_EL2 的值：只置 RW 位。", w:{x2:0x80000000}});
+S({ph:2, pc:A.el2+16, code:"msr hcr_el2, x2", loc:"boot.S:82", desc:"HCR_EL2.RW=1：下一级（EL1）为 AArch64。TSC=0/HCD=0：SMC 不被 trap 到 EL2（直通 EL3）、HVC 可用。", w:{hcr_el2:0x80000000}});
+S({ph:2, pc:A.el2+20, code:"mov x2, #0x3c5; msr spsr_el2, x2", loc:"boot.S:84-85", desc:"目标状态 EL1h + DAIF 全屏蔽。", w:{x2:0x3C5, spsr_el2:0x3C5}});
+S({ph:2, pc:A.el2+24, code:"ldr x2, =start_el1; msr elr_el2, x2", loc:"boot.S:86-87", desc:"ELR_EL2 = 0x4000008C：ERET 目标为 start_el1。", w:{x2:0x4000008C, elr_el2:0x4000008C}});
+S({ph:2, pc:A.el2+32, code:"bl el2_report", loc:"boot.S:89 → main.c:269", desc:"报告 EL2 级别：打印 HCR_EL2 与 VBAR_EL2。", to:{pc:0x40000088}, w:{x30:0x40000088}, logs:[
+  L.ln("[EL2]","当前级别 EL2（Hypervisor）"),
+  L.ln("[REG]","HCR_EL2   = 0x0000000080000000"),
+  L.ln("[REG]","VBAR_EL2  = 0x0000000040000800"),
+  L.ln("[EL2]","设 HCR_EL2(RW=1)，ERET 到 EL1")
+]});
+S({ph:2, pc:A.el2+40, code:"eret", loc:"boot.S:90", desc:"EL2 → EL1：进入“内核”级别。SP 切到 SP_EL1（尚未设置，为复位值 0）。", to:{pc:A.el1, el:1, mode:"EL1h", daif:15, sp:0}, ev:{kind:"eret", from:2, to:1, cause:"ERET（引导降级）"}});
+
+S({ph:3, pc:A.el1, code:"msr vbar_el1, x19", loc:"boot.S:96 start_el1", desc:"设置 EL1 向量表。之后 EL0 的 SVC/BRK/UDF/IRQ 都会查这张表。", w:{vbar_el1:0x40000800}});
+S({ph:3, pc:A.el1+4, code:"ldr x2, =_stack_top_el1; mov sp, x2", loc:"boot.S:97-98", desc:"设置 EL1 栈 SP_EL1 = 0x40006080（EL1h 下当前 sp 即 SP_EL1）。", w:{x2:0x40006080, spEl1:0x40006080, sp:0x40006080}});
+S({ph:3, pc:A.el1+8, code:"ldr x2, =_stack_top_el0; msr sp_el0, x2", loc:"boot.S:99-100", desc:"提前设好 EL0 栈：SP_EL0 可从 EL1 访问，但 EL0 自己没有 msr 权限。", w:{x2:0x40007080, spEl0:0x40007080}});
+S({ph:3, pc:A.el1+16, code:"mov x2, #(1 << 9); msr cntkctl_el1, x2", loc:"boot.S:104-105", desc:"CNTKCTL_EL1.EL0PTEN=1：允许 EL0 访问 EL1 物理定时器（cntp_*_el0），否则 EL0 一碰就 trap 到 EL1。", w:{x2:0x200, cntkctl_el1:0x200}});
+S({ph:3, pc:A.el1+20, code:"mov x2, #0; msr spsr_el1, x2", loc:"boot.S:107-108", desc:"目标状态 EL0t + DAIF 不屏蔽（中断开放——后面 IRQ 演示必需）。", w:{x2:0, spsr_el1:0}});
+S({ph:3, pc:A.el1+24, code:"ldr x2, =main; msr elr_el1, x2", loc:"boot.S:109-110", desc:"ELR_EL1 = 0x40002100：ERET 目标为 C 的 main 函数。", w:{x2:0x40002100, elr_el1:0x40002100}});
+S({ph:3, pc:A.el1+40, code:"bl el1_report", loc:"boot.S:112 → main.c:279", desc:"报告 EL1 级别：打印 VBAR_EL1 与 SCTLR_EL1（复位值，本示例不改 MMU）。", to:{pc:0x400000bc}, w:{x30:0x400000bc}, logs:[
+  L.ln("[EL1]","当前级别 EL1（内核）"),
+  L.ln("[REG]","VBAR_EL1  = 0x0000000040000800"),
+  L.ln("[REG]","SCTLR_EL1 = 0x0000000000c50838"),
+  L.ln("[EL1]","设 SPSR_EL1=EL0t，ERET 到 EL0")
+]});
+S({ph:3, pc:A.el1+48, code:"eret", loc:"boot.S:113", desc:"EL1 → EL0：PC←ELR_EL1=main；SP 切到 SP_EL0=0x40007080；DAIF=0（中断开放）。到达应用层。", to:{pc:A.main, el:0, mode:"EL0t", daif:0, sp:0x40007080}, ev:{kind:"eret", from:1, to:0, cause:"ERET（引导降级）"}});
+
+S({ph:4, pc:0x40002114, code:'bl log_current_level(0, "（应用）")', loc:"main.c:421 main", desc:"main 从 EL0 开始执行：报告当前级别。", to:{pc:0x40002118}, w:{x30:0x40002118}, logs:[L.ln("[EL0]","当前级别 EL0（应用）")]});
+S({ph:4, pc:0x40002124, code:'bl log_step(2, 2, "异常演示")', loc:"main.c:423", desc:"进入第 2 阶段：异常演示。", to:{pc:0x40002128}, w:{x30:0x40002128}, logs:[L.blank(), L.step(2,2,"异常演示")]});
+S({ph:4, pc:0x40002130, code:'bl log_test("SVC 系统调用")', loc:"main.c:425", desc:"测试项标题：SVC 系统调用。", to:{pc:0x40002134}, w:{x30:0x40002134}, logs:[L.blank(), L.test("SVC 系统调用（EL0 -> EL1 简单往返）")]});
+S({ph:4, pc:0x40002134, code:"svc #0", loc:"main.c:426", desc:"EL0 主动发出同步异常（系统调用），请求进入 EL1。异常进入只能升级或同级：EL0→EL1。", to:{pc:0x40002134}, ev:{kind:"trigger", cause:"SVC #0"}});
+S({ph:4, pc:0x40002134, hw:true, code:"【硬件】异常入口：EL0 → EL1", loc:"CPU 自动", desc:"硬件自动完成五件事：① PSTATE → SPSR_EL1（EL0t，NZCV=0x8）；② ELR_EL1 ← PC+4 = 0x40002138；③ ESR_EL1 ← EC=0x15(SVC)、imm=0；④ 按 VBAR_EL1+0x400（来自低 EL、AArch64、同步）取向量；⑤ 切到 EL1h，SP←SP_EL1，DAIF 屏蔽。", w:{spsr_el1:0x80000000, elr_el1:0x40002138, esr_el1:0x54000000}, to:{pc:0x40000C00, el:1, mode:"EL1h", daif:15, sp:0x40006080}, ev:{kind:"exc", from:0, to:1, level:1, vec:0x400, cause:"SVC #0"}});
+S({ph:4, pc:0x40000C00, code:"b lower_el_sync_handler", loc:"vector_table.S:39 (+0x400)", desc:"向量槽 +0x400 的第一条指令：跳转到共享的同步异常处理器（SVC/HVC/SMC/BRK/UDF 都从这进）。", to:{pc:A.sync}});
+S({ph:4, pc:A.sync, code:"save_all（12 × stp/str）", loc:"vector_table.S:86 save_all", desc:"保存 x0–x30 到 EL1 栈：SP_EL1 0x40006080 → 0x40005FC0（-192 字节）。中断是异步的，现场必须全保存。", to:{sp:0x40005FC0}});
+S({ph:4, pc:0x4000102c, code:"mrs x0, currentel; lsr; and; mov x19, x0", loc:"vector_table.S:90-93", desc:"在处理器内部确认当前级别 = 1（EL1）。", w:{x0:1}});
+S({ph:4, pc:0x4000104c, code:"mrs x1, esr_el1; x2, elr_el1; x3, spsr_el1", loc:"vector_table.S:101-103", desc:"按当前级别读异常上下文三件套（ESR/ELR/SPSR）到参数寄存器。", w:{x1:0x54000000, x2:0x40002138, x3:0x80000000}});
+S({ph:4, pc:0x40001078, code:"bl dispatch_sync(level=1, esr, elr, spsr)", loc:"vector_table.S:115 → main.c:305", desc:"C 分发器：识别 EC=0x15 普通 SVC，返回 0（ELR 已指向下一条指令，无需跳过）。", to:{pc:0x4000107c}, w:{x30:0x4000107c, x0:0}, logs:[
+  L.ln("[SYNC]","到达 EL1：EC=0x15 (SVC)  imm=0x00"),
+  L.ln("[REG]","ELR_ELx = 0x0000000040002138"),
+  L.ln("[REG]","SPSR_ELx = 0x0000000080000000"),
+  L.ln("[EL1]","普通 SVC，直接 ERET 返回 EL0")
+]});
+S({ph:4, pc:0x4000107c, code:"cbz x0, 4f", loc:"vector_table.S:121", desc:"返回值 0 → 跳过 ELR+4 修正段，直接恢复现场。", to:{pc:0x400010c0}});
+S({ph:4, pc:0x400010c0, code:"restore_all（11 × ldp/ldr）", loc:"vector_table.S:140 restore_all", desc:"从栈恢复 x0–x30，SP_EL1 复位回 0x40006080。", to:{sp:0x40006080}});
+S({ph:4, pc:0x400010ec, code:"eret", loc:"vector_table.S:141", desc:"EL1 → EL0：PSTATE←SPSR_EL1（EL0t、中断开放），PC←ELR_EL1=0x40002138。正好回到 svc 的下一条指令。", to:{pc:0x40002138, el:0, mode:"EL0t", daif:0, sp:0x40007080}, ev:{kind:"eret", from:1, to:0, cause:"ERET（SVC 返回）"}});
+S({ph:4, pc:0x4000214c, code:'bl log_line("[OK]", "SVC 往返完成")', loc:"main.c:427", desc:"打印 OK：一次完整的“进入异常→处理→ERET 返回”。", to:{pc:0x40002150}, w:{x30:0x40002150}, logs:[L.ln("[OK]","SVC 往返完成，回到 EL0")]});
+
+S({ph:5, pc:0x40002158, code:'bl log_test("SVC/HVC/SMC 链条")', loc:"main.c:429", desc:"第二项测试：三层链条。", to:{pc:0x4000215c}, w:{x30:0x4000215c}, logs:[L.blank(), L.test("SVC/HVC/SMC 链条（EL0 -> EL1 -> EL2 -> EL3）")]});
+S({ph:5, pc:0x4000215c, code:"svc #0x42", loc:"main.c:430", desc:"imm=0x42 是“链条”标记：EL1 收到后将转发 HVC 到 EL2，EL2 再转发 SMC 到 EL3——嵌套异常。", to:{pc:0x4000215c}, ev:{kind:"trigger", cause:"SVC #0x42"}});
+S({ph:5, pc:0x4000215c, hw:true, code:"【硬件】异常入口：EL0 → EL1", loc:"CPU 自动", desc:"与上次 SVC 相同：ESR_EL1←0x54000042（EC=0x15、imm=0x42），ELR_EL1←0x40002160，SPSR_EL1 保存 EL0t。查 VBAR_EL1+0x400。", w:{spsr_el1:0x80000000, elr_el1:0x40002160, esr_el1:0x54000042}, to:{pc:0x40000C00, el:1, mode:"EL1h", daif:15, sp:0x40006080}, ev:{kind:"exc", from:0, to:1, level:1, vec:0x400, cause:"SVC #0x42"}});
+S({ph:5, pc:0x40000C00, code:"b lower_el_sync_handler", loc:"vector_table.S:39 (+0x400)", desc:"进入共享同步异常处理器。", to:{pc:A.sync}});
+S({ph:5, pc:A.sync, code:"save_all", loc:"vector_table.S:86", desc:"保存 EL0 的现场到 EL1 栈：SP_EL1 → 0x40005FC0。", to:{sp:0x40005FC0}});
+S({ph:5, pc:0x4000102c, code:"mrs x0, currentel（=1）", loc:"vector_table.S:90-93", desc:"当前级别 EL1。", w:{x0:1}});
+S({ph:5, pc:0x4000104c, code:"mrs x1/x2/x3, esr/elr/spsr_el1", loc:"vector_table.S:101-103", desc:"读 EL1 的异常上下文。", w:{x1:0x54000042, x2:0x40002160, x3:0x80000000}});
+S({ph:5, pc:0x40001078, code:"bl dispatch_sync(level=1, ...)", loc:"vector_table.S:115 → main.c:327-330", desc:"C 分发器看到 imm=0x42：这是“链条”标记，EL1 转发 HVC 到 EL2。", to:{pc:0x4000107c}, w:{x30:0x4000107c}, logs:[
+  L.ln("[SYNC]","到达 EL1：EC=0x15 (SVC)  imm=0x42"),
+  L.ln("[REG]","ELR_ELx = 0x0000000040002160"),
+  L.ln("[REG]","SPSR_ELx = 0x0000000080000000"),
+  L.ln("[EL1]","转发 HVC 到 EL2 ...")
+]});
+S({ph:5, pc:0x40001e64, code:"hvc #0", loc:"main.c:330 dispatch_sync（EL1 运行）", desc:"EL1 在处理 SVC 的过程中主动发 HVC 升到 EL2——异常可以嵌套：此刻 EL0 的现场在 EL1 栈上，EL1 的上下文又将被保存进 EL2 栈。", to:{pc:0x40001e64}, ev:{kind:"trigger", cause:"HVC #0"}});
+S({ph:5, pc:0x40001e64, hw:true, code:"【硬件】异常入口：EL1 → EL2", loc:"CPU 自动", desc:"保存 EL1h 状态（SPSR_EL2=0x800003C5）；ELR_EL2←0x40001E68（hvc 的下一条）；ESR_EL2←EC=0x16(HVC)。查 VBAR_EL2+0x400——三级共用同一张表、同一偏移。", w:{spsr_el2:0x800003C5, elr_el2:0x40001E68, esr_el2:0x58000000}, to:{pc:0x40000C00, el:2, mode:"EL2h", daif:15, sp:0x40005080}, ev:{kind:"exc", from:1, to:2, level:2, vec:0x400, cause:"HVC #0"}});
+S({ph:5, pc:0x40000C00, code:"b lower_el_sync_handler", loc:"vector_table.S:39 (+0x400)", desc:"EL2 也从 +0x400 槽进入同一个共享处理器。", to:{pc:A.sync}});
+S({ph:5, pc:A.sync, code:"save_all", loc:"vector_table.S:86", desc:"保存 EL1 的现场到 EL2 栈：SP_EL2 0x40005080 → 0x40004FC0。", to:{sp:0x40004FC0}});
+S({ph:5, pc:0x4000102c, code:"mrs x0, currentel（=2）", loc:"vector_table.S:90-93", desc:"当前级别 EL2。", w:{x0:2}});
+S({ph:5, pc:0x4000104c, code:"mrs x1/x2/x3, esr/elr/spsr_el2", loc:"vector_table.S:105-109", desc:"读 EL2 的异常上下文（走 b.eq 2f 的 EL2 分支）。", w:{x1:0x58000000, x2:0x40001E68, x3:0x800003C5}});
+S({ph:5, pc:0x40001078, code:"bl dispatch_sync(level=2, ...)", loc:"vector_table.S:115 → main.c:345-349", desc:"EL2 的分发器：收到 HVC，继续转发 SMC 到 EL3。", to:{pc:0x4000107c}, w:{x30:0x4000107c}, logs:[
+  L.ln("[SYNC]","到达 EL2：EC=0x16 (HVC)  imm=0x00"),
+  L.ln("[REG]","ELR_ELx = 0x0000000040001e68"),
+  L.ln("[REG]","SPSR_ELx = 0x00000000800003c5"),
+  L.ln("[EL2]","转发 SMC 到 EL3 ...")
+]});
+S({ph:5, pc:0x40001cd4, code:"smc #0", loc:"main.c:348 dispatch_sync（EL2 运行）", desc:"EL2 转发 SMC：从 Non-secure EL2 请求进入 Secure EL3。HCR_EL2.TSC=0 保证 SMC 不被 trap 到 EL2，直通 EL3。", to:{pc:0x40001cd4}, ev:{kind:"trigger", cause:"SMC #0"}});
+S({ph:5, pc:0x40001cd4, hw:true, code:"【硬件】异常入口：EL2 → EL3", loc:"CPU 自动", desc:"保存 EL2h（SPSR_EL3=0x800003C9）；ELR_EL3←0x40001CD8；ESR_EL3←EC=0x17(SMC)。查 VBAR_EL3+0x400。同时切回 Secure 世界。", w:{spsr_el3:0x800003C9, elr_el3:0x40001CD8, esr_el3:0x5C000000}, to:{pc:0x40000C00, el:3, mode:"EL3h", daif:15, sp:0x40004080, secure:true}, ev:{kind:"exc", from:2, to:3, level:3, vec:0x400, cause:"SMC #0"}});
+S({ph:5, pc:0x40000C00, code:"b lower_el_sync_handler", loc:"vector_table.S:39 (+0x400)", desc:"EL3 从同一张表的 +0x400 槽进入。", to:{pc:A.sync}});
+S({ph:5, pc:A.sync, code:"save_all", loc:"vector_table.S:86", desc:"保存 EL2 的现场到 EL3 栈：SP_EL3 0x40004080 → 0x40003FC0。", to:{sp:0x40003FC0}});
+S({ph:5, pc:0x4000102c, code:"mrs x0, currentel（=3）", loc:"vector_table.S:90-93", desc:"当前级别 EL3。", w:{x0:3}});
+S({ph:5, pc:0x4000104c, code:"mrs x1/x2/x3, esr/elr/spsr_el3", loc:"vector_table.S:110-114", desc:"读 EL3 的异常上下文（走 b.eq 1f 的 EL3 分支）。", w:{x1:0x5C000000, x2:0x40001CD8, x3:0x800003C9}});
+S({ph:5, pc:0x40001078, code:"bl dispatch_sync(level=3, ...)", loc:"vector_table.S:115 → main.c:351-354", desc:"链条终点：EL3 报告“到达终点”，之后逐级 ERET 返回。返回 0（SMC 的 ELR 已是下一条）。", to:{pc:0x4000107c}, w:{x30:0x4000107c, x0:0}, logs:[
+  L.ln("[SYNC]","到达 EL3：EC=0x17 (SMC)  imm=0x00"),
+  L.ln("[REG]","ELR_ELx = 0x0000000040001cd8"),
+  L.ln("[REG]","SPSR_ELx = 0x00000000800003c9"),
+  L.ln("[EL3]","到达终点，开始逐级 ERET 返回")
+]});
+S({ph:5, pc:0x4000107c, code:"cbz x0, 4f", loc:"vector_table.S:121", desc:"返回 0 → 无需 ELR+4。", to:{pc:0x400010c0}});
+S({ph:5, pc:0x400010c0, code:"restore_all", loc:"vector_table.S:140", desc:"恢复 EL2 的现场，SP_EL3 复位回 0x40004080。", to:{sp:0x40004080}});
+S({ph:5, pc:0x400010ec, code:"eret", loc:"vector_table.S:141", desc:"EL3 → EL2：回到 0x40001CD8（EL2 的 dispatch_sync 中 smc 的下一条）。因 SCR_EL3.NS=1，切回 Non-secure。", to:{pc:0x40001CD8, el:2, mode:"EL2h", daif:15, sp:0x40005080, secure:false}, ev:{kind:"eret", from:3, to:2, cause:"ERET（链条回程 1/3）"}, logs:[L.ln("[RET]","从 EL3 返回到 EL2")]});
+S({ph:5, pc:0x40001CD8, code:"dispatch_sync(EL2) 收尾：cbz; restore_all", loc:"main.c:349 → vector_table.S:121,140", desc:"EL2 的分发器打印返回信息后返回 0，恢复现场，准备 ERET 回 EL1。", to:{sp:0x40005080}});
+S({ph:5, pc:0x400010ec, code:"eret", loc:"vector_table.S:141", desc:"EL2 → EL1：回到 0x40001E68（EL1 的 dispatch_sync 中 hvc 的下一条）。", to:{pc:0x40001E68, el:1, mode:"EL1h", daif:15, sp:0x40006080}, ev:{kind:"eret", from:2, to:1, cause:"ERET（链条回程 2/3）"}, logs:[L.ln("[RET]","从 EL3 逐级返回到 EL1")]});
+S({ph:5, pc:0x40001E68, code:"dispatch_sync(EL1) 收尾：cbz; restore_all", loc:"main.c:331 → vector_table.S:121,140", desc:"EL1 的分发器收尾，恢复 EL0 现场，准备最后一次 ERET。", to:{sp:0x40006080}});
+S({ph:5, pc:0x400010ec, code:"eret", loc:"vector_table.S:141", desc:"EL1 → EL0：链条走完，回到 0x40002160（EL0 的 svc #0x42 下一条）。", to:{pc:0x40002160, el:0, mode:"EL0t", daif:0, sp:0x40007080}, ev:{kind:"eret", from:1, to:0, cause:"ERET（链条回程 3/3）"}});
+S({ph:5, pc:0x4000216c, code:'bl log_line("[OK]", "链条完成")', loc:"main.c:431", desc:"三层链条完成：进入只升（SVC→HVC→SMC），返回只降（ERET×3）。", to:{pc:0x40002170}, w:{x30:0x40002170}, logs:[L.ln("[OK]","链条完成，回到 EL0")]});
+
+S({ph:6, pc:0x40002178, code:'bl log_test("BRK 调试异常")', loc:"main.c:433", desc:"第三项测试：BRK 软件断点。", to:{pc:0x4000217c}, w:{x30:0x4000217c}, logs:[L.blank(), L.test("BRK 调试异常")]});
+S({ph:6, pc:0x4000217c, code:"brk #0", loc:"main.c:434", desc:"软件断点指令，EC=0x3C。关键差异：BRK 的 ELR 指向触发指令本身，而不是下一条！", to:{pc:0x4000217c}, ev:{kind:"trigger", cause:"BRK #0"}});
+S({ph:6, pc:0x4000217c, hw:true, code:"【硬件】异常入口：EL0 → EL1", loc:"CPU 自动", desc:"ESR_EL1=0xF2000000（EC=0x3C、IL=1、imm=0）；ELR_EL1=0x4000217C——指向 brk 指令本身；SPSR_EL1 保存 EL0t。查 VBAR_EL1+0x400。", w:{spsr_el1:0x80000000, elr_el1:0x4000217C, esr_el1:0xF2000000}, to:{pc:0x40000C00, el:1, mode:"EL1h", daif:15, sp:0x40006080}, ev:{kind:"exc", from:0, to:1, level:1, vec:0x400, cause:"BRK #0"}});
+S({ph:6, pc:0x40000C00, code:"b lower_el_sync_handler", loc:"vector_table.S:39 (+0x400)", desc:"进入共享同步异常处理器。", to:{pc:A.sync}});
+S({ph:6, pc:A.sync, code:"save_all", loc:"vector_table.S:86", desc:"保存现场：SP_EL1 → 0x40005FC0。", to:{sp:0x40005FC0}});
+S({ph:6, pc:0x4000102c, code:"mrs x0, currentel（=1）", loc:"vector_table.S:90-93", desc:"当前级别 EL1。", w:{x0:1}});
+S({ph:6, pc:0x4000104c, code:"mrs x1/x2/x3, esr/elr/spsr_el1", loc:"vector_table.S:101-103", desc:"读 EL1 异常上下文。", w:{x1:0xF2000000, x2:0x4000217C, x3:0x80000000}});
+S({ph:6, pc:0x40001078, code:"bl dispatch_sync(level=1, ...)", loc:"vector_table.S:115 → main.c:335-337", desc:"识别 EC=0x3C 为 BRK 调试异常，返回 1：要求把 ELR+4 跳过触发指令。", to:{pc:0x4000107c}, w:{x30:0x4000107c, x0:1}, logs:[
+  L.ln("[SYNC]","到达 EL1：EC=0x3c (BRK)  imm=0x00"),
+  L.ln("[REG]","ELR_ELx = 0x000000004000217c"),
+  L.ln("[REG]","SPSR_ELx = 0x0000000080000000"),
+  L.ln("[EL1]","BRK 调试异常，ELR+4 跳过该指令")
+]});
+S({ph:6, pc:0x4000107c, code:"cbz x0, 4f（x0=1，走 ELR+4 段）", loc:"vector_table.S:121", desc:"返回值 1 ≠ 0：不跳过修正段，进入 ELR+4 逻辑。", to:{pc:0x40001094}});
+S({ph:6, pc:0x40001094, code:"mrs x5, elr_el1; add x5, x5, #4; msr elr_el1, x5", loc:"vector_table.S:123-131", desc:"ELR_EL1：0x4000217C → 0x40002180，跳过 brk 指令本身。否则 ERET 后会重新执行同一条 brk，再次触发异常，陷入死循环。", w:{x4:4, x5:0x40002180, elr_el1:0x40002180}});
+S({ph:6, pc:0x400010c0, code:"restore_all", loc:"vector_table.S:140", desc:"恢复现场：SP_EL1 → 0x40006080。", to:{sp:0x40006080}});
+S({ph:6, pc:0x400010ec, code:"eret", loc:"vector_table.S:141", desc:"EL1 → EL0：PC←修正后的 ELR_EL1=0x40002180（跳过了 brk）。", to:{pc:0x40002180, el:0, mode:"EL0t", daif:0, sp:0x40007080}, ev:{kind:"eret", from:1, to:0, cause:"ERET（BRK 返回，ELR 已 +4）"}});
+S({ph:6, pc:0x4000218c, code:'bl log_line("[OK]", "BRK 处理完成")', loc:"main.c:435", desc:"BRK 演示完成。", to:{pc:0x40002190}, w:{x30:0x40002190}, logs:[L.ln("[OK]","BRK 处理完成，回到 EL0")]});
+
+S({ph:7, pc:0x40002198, code:'bl log_test("UDF 无效指令")', loc:"main.c:437", desc:"第四项测试：UDF 无效指令（编码 0x00000000）。", to:{pc:0x4000219c}, w:{x30:0x4000219c}, logs:[L.blank(), L.test("UDF 无效指令")]});
+S({ph:7, pc:0x4000219c, code:"udf #0（编码 0x00000000）", loc:"main.c:438", desc:"非法指令触发 UNDEFINED 同步异常，EC=0x00。与 BRK 一样，ELR 指向触发指令本身。", to:{pc:0x4000219c}, ev:{kind:"trigger", cause:"UDF #0"}});
+S({ph:7, pc:0x4000219c, hw:true, code:"【硬件】异常入口：EL0 → EL1", loc:"CPU 自动", desc:"ESR_EL1=0x02000000（EC=0x00、IL=1、ISS=指令编码 0）；ELR_EL1=0x4000219C（指向 udf 本身）。查 VBAR_EL1+0x400。", w:{spsr_el1:0x80000000, elr_el1:0x4000219C, esr_el1:0x02000000}, to:{pc:0x40000C00, el:1, mode:"EL1h", daif:15, sp:0x40006080}, ev:{kind:"exc", from:0, to:1, level:1, vec:0x400, cause:"UDF #0"}});
+S({ph:7, pc:0x40000C00, code:"b lower_el_sync_handler", loc:"vector_table.S:39 (+0x400)", desc:"进入共享同步异常处理器。", to:{pc:A.sync}});
+S({ph:7, pc:A.sync, code:"save_all", loc:"vector_table.S:86", desc:"保存现场：SP_EL1 → 0x40005FC0。", to:{sp:0x40005FC0}});
+S({ph:7, pc:0x4000102c, code:"mrs x0, currentel（=1）", loc:"vector_table.S:90-93", desc:"当前级别 EL1。", w:{x0:1}});
+S({ph:7, pc:0x4000104c, code:"mrs x1/x2/x3, esr/elr/spsr_el1", loc:"vector_table.S:101-103", desc:"读 EL1 异常上下文。", w:{x1:0x02000000, x2:0x4000219C, x3:0x80000000}});
+S({ph:7, pc:0x40001078, code:"bl dispatch_sync(level=1, ...)", loc:"vector_table.S:115 → main.c:338-340", desc:"识别 EC=0x00 无效指令，返回 1：同样要求 ELR+4。", to:{pc:0x4000107c}, w:{x30:0x4000107c, x0:1}, logs:[
+  L.ln("[SYNC]","到达 EL1：EC=0x00 (UNDEFINED)  imm=0x00"),
+  L.ln("[REG]","ELR_ELx = 0x000000004000219c"),
+  L.ln("[REG]","SPSR_ELx = 0x0000000080000000"),
+  L.ln("[EL1]","无效指令，ELR+4 跳过该指令")
+]});
+S({ph:7, pc:0x4000107c, code:"cbz x0, 4f（x0=1，走 ELR+4 段）", loc:"vector_table.S:121", desc:"返回 1：进入 ELR+4 修正。", to:{pc:0x40001094}});
+S({ph:7, pc:0x40001094, code:"mrs x5, elr_el1; add x5, x5, #4; msr elr_el1, x5", loc:"vector_table.S:123-131", desc:"ELR_EL1：0x4000219C → 0x400021A0，跳过 udf 指令。", w:{x4:4, x5:0x400021A0, elr_el1:0x400021A0}});
+S({ph:7, pc:0x400010c0, code:"restore_all", loc:"vector_table.S:140", desc:"恢复现场。", to:{sp:0x40006080}});
+S({ph:7, pc:0x400010ec, code:"eret", loc:"vector_table.S:141", desc:"EL1 → EL0：PC←0x400021A0（跳过了 udf）。", to:{pc:0x400021A0, el:0, mode:"EL0t", daif:0, sp:0x40007080}, ev:{kind:"eret", from:1, to:0, cause:"ERET（UDF 返回，ELR 已 +4）"}});
+S({ph:7, pc:0x400021ac, code:'bl log_line("[OK]", "无效指令处理完成")', loc:"main.c:439", desc:"UDF 演示完成。", to:{pc:0x400021b0}, w:{x30:0x400021b0}, logs:[L.ln("[OK]","无效指令处理完成，回到 EL0")]});
+
+S({ph:8, pc:0x400021b8, code:'bl log_test("IRQ 定时器中断")', loc:"main.c:441", desc:"第五项测试：异步异常（中断）。", to:{pc:0x400021bc}, w:{x30:0x400021bc}, logs:[L.blank(), L.test("IRQ 定时器中断（异步）")]});
+S({ph:8, pc:0x400021bc, code:"mov w0, #0x20000", loc:"main.c:410 timer_irq_demo", desc:"准备定时器装载值 131072。", w:{x0:0x20000}});
+S({ph:8, pc:0x400021c0, code:"msr cntp_tval_el0, x0", loc:"main.c:410", desc:"装载定时器：CNTP_TVAL=0x20000，此后每个 tick 自动递减，减到 0 断言中断。", w:{cntp_tval:0x20000}});
+S({ph:8, pc:0x400021c4, code:"mov w0, #0x1", loc:"main.c:411", desc:"准备控制字。", w:{x0:1}});
+S({ph:8, pc:0x400021c8, code:"msr cntp_ctl_el0, x0", loc:"main.c:411", desc:"使能定时器（ENABLE=1、IMASK=0）。中断将异步到达——何时到、打断哪条指令都不确定，这是与同步异常的本质区别。", w:{cntp_ctl:1}});
+S({ph:8, pc:0x400021dc, code:'bl log_line("[ASYNC]", "等待异步中断...")', loc:"main.c:412", desc:"EL0 开始忙等 g_irq_ok 置位。", to:{pc:0x400021e0}, w:{x30:0x400021e0}, logs:[L.ln("[ASYNC]","等待异步中断（定时器 IRQ -> EL1 +0x480）...")]});
+S({ph:8, pc:0x400021e8, code:"忙等循环：ldr w0, [g_irq_ok]; cbz w0, loop", loc:"main.c:413-415", desc:"读 g_irq_ok=0，继续循环。CNTP_TVAL 递减中（0x18000）。", w:{x0:0, cntp_tval:0x18000}, to:{pc:0x400021e8}});
+S({ph:8, pc:0x400021e8, code:"忙等循环：ldr w0, [g_irq_ok]; cbz w0, loop", loc:"main.c:413-415", desc:"继续等待。CNTP_TVAL=0x6000，快到 0 了。", w:{x0:0, cntp_tval:0x6000}, to:{pc:0x400021e8}});
+S({ph:8, pc:0x400021e8, code:"忙等循环：ldr w0, [g_irq_ok]; cbz w0, loop", loc:"main.c:413-415", desc:"继续等待。CNTP_TVAL 减到 0：比较器条件满足，CNTP_CTL.ISTATUS 置 1，定时器输出断言！", w:{x0:0, cntp_tval:0, cntp_ctl:5}, to:{pc:0x400021e8}});
+S({ph:8, pc:0x400021ec, hw:true, code:"【硬件】IRQ #30 到达（异步抢占）", loc:"定时器 + GIC", desc:"CNTP_TVAL 归零 → CNTP_CTL.ISTATUS=1 → EL1 物理定时器断言 PPI30 → GIC 分发器 → CPU interface 拉高 IRQ 线。EL0 的 PSTATE.I=0（中断未屏蔽）→ 立即抢占当前指令。同步异常是“指令主动触发”，异步异常是“不请自来”。", to:{pc:0x400021ec}, ev:{kind:"irq", cause:"IRQ #30（PPI 定时器）"}});
+S({ph:8, pc:0x400021ec, hw:true, code:"【硬件】异常入口（IRQ）：EL0 → EL1", loc:"CPU 自动", desc:"异步入口动作：① PSTATE → SPSR_EL1（EL0t）；② ELR_EL1 ← 当前 PC=0x400021EC（停在循环处，而非“下一条”）；③ IRQ 不写 ESR；④ 查 VBAR_EL1+0x480（低 EL、AArch64、IRQ 槽）；⑤ 切 EL1h、SP_EL1、DAIF 屏蔽（防嵌套）。", w:{spsr_el1:0x80000000, elr_el1:0x400021EC}, to:{pc:0x40000C80, el:1, mode:"EL1h", daif:15, sp:0x40006080}, ev:{kind:"exc", from:0, to:1, level:1, vec:0x480, cause:"IRQ #30"}});
+S({ph:8, pc:0x40000C80, code:"b lower_el_irq_handler", loc:"vector_table.S:40 (+0x480)", desc:"IRQ 槽（+0x480）跳转到 IRQ 专用处理器（与同步 +0x400 不同入口）。", to:{pc:A.irqh}});
+S({ph:8, pc:A.irqh, code:"save_all", loc:"vector_table.S:144", desc:"保存 EL0 现场：SP_EL1 0x40006080 → 0x40005FC0。", to:{sp:0x40005FC0}});
+S({ph:8, pc:0x4000111c, code:"bl irq_handler_c", loc:"vector_table.S:146 → main.c:362", desc:"中断处理：读 GICC_IAR 确认中断（ID=30 即 PPI30）；写 GICC_EOIR 结束；关闭定时器（电平触发，不关会立刻重新断言）；置 g_irq_ok=1 通知 EL0。", to:{pc:0x40001120}, w:{x30:0x40001120, gicc_iar:0x1E, gicc_eoir:0x1E, cntp_ctl:0, g_irq_ok:1}, logs:[
+  L.ln("[IRQ]","GICC_IAR=0x01e  中断ID=0x1e (EL1 物理定时器)")
+]});
+S({ph:8, pc:0x40001120, code:"restore_all", loc:"vector_table.S:147", desc:"恢复 EL0 现场：SP_EL1 → 0x40006080。", to:{sp:0x40006080}});
+S({ph:8, pc:0x4000114c, code:"eret", loc:"vector_table.S:148", desc:"EL1 → EL0：PC←ELR_EL1=0x400021EC（被打断的循环处），PSTATE 恢复 DAIF 开放。", to:{pc:0x400021ec, el:0, mode:"EL0t", daif:0, sp:0x40007080}, ev:{kind:"eret", from:1, to:0, cause:"ERET（IRQ 返回）"}});
+S({ph:8, pc:0x400021ec, code:"ldr w0,[g_irq_ok]=1；退出忙等；bl log_line", loc:"main.c:443", desc:"g_irq_ok=1 → cbz 不成立，跳出忙等，打印 OK。", to:{pc:0x40002200}, w:{x0:1, x30:0x40002200}, logs:[L.ln("[OK]","IRQ 处理完成，回到 EL0")]});
+
+S({ph:9, pc:0x40002208, code:'bl log_banner("全部验证完成")', loc:"main.c:445", desc:"收尾横幅。", to:{pc:0x4000220c}, w:{x30:0x4000220c}, logs:[
+  L.blank(), L.banner("========== 全部验证完成 (EL0<->EL1<->EL2<->EL3、同步/异步异常) =========="), L.blank()
+]});
+S({ph:9, pc:0x4000220c, code:"wfe", loc:"main.c:447", desc:"等待事件指令：低功耗挂起。", to:{pc:0x4000220c}});
+S({ph:9, pc:0x40002214, code:"b 0x4000220c（无限循环）", loc:"main.c:448", desc:"演示结束：真实程序在此无限循环（QEMU 中按 Ctrl-C 退出）。可视化到此为止。", to:{pc:0x4000220c}, ev:{kind:"end"}});
+
+const SYSGROUPS = [
+  {t:"EL3（固件）", regs:[["scr_el3","SCR_EL3"],["vbar_el3","VBAR_EL3"],["spsr_el3","SPSR_EL3"],["elr_el3","ELR_EL3"],["esr_el3","ESR_EL3"]]},
+  {t:"EL2（Hypervisor）", regs:[["hcr_el2","HCR_EL2"],["vbar_el2","VBAR_EL2"],["spsr_el2","SPSR_EL2"],["elr_el2","ELR_EL2"],["esr_el2","ESR_EL2"]]},
+  {t:"EL1（内核）", regs:[["sctlr_el1","SCTLR_EL1"],["vbar_el1","VBAR_EL1"],["cntkctl_el1","CNTKCTL_EL1"],["spsr_el1","SPSR_EL1"],["elr_el1","ELR_EL1"],["esr_el1","ESR_EL1"]]},
+  {t:"定时器 / GIC", regs:[["cntp_tval","CNTP_TVAL_EL0"],["cntp_ctl","CNTP_CTL_EL0"],["gicd_igroupr","GICD_IGROUPR"],["gicd_ctlr","GICD_CTLR"],["gicd_isenabler","GICD_ISENABLER0"],["gicc_ctlr","GICC_CTLR"],["gicc_pmr","GICC_PMR"],["gicc_iar","GICC_IAR"],["gicc_eoir","GICC_EOIR"]]},
+  {t:"内存", regs:[["g_irq_ok","[g_irq_ok] 0x40003070"]]}
+];
+
+const NAMEMAP = {pc:"PC", el:"EL", mode:"PSTATE.M", daif:"PSTATE.DAIF", sp:"SP", spEl0:"SP_EL0", spEl1:"SP_EL1", spEl2:"SP_EL2", spEl3:"SP_EL3", secure:"安全状态"};
+for(const g of SYSGROUPS) for(const r of g.regs) NAMEMAP[r[0]] = r[1];
+for(let i=0;i<=30;i++) NAMEMAP["x"+i] = "X"+i;
+
+const MODE_D = {0:"EL0t（用户态，用 SP_EL0）",4:"EL1t",5:"EL1h（内核，用 SP_ELx）",8:"EL2t",9:"EL2h（Hypervisor，用 SP_ELx）",12:"EL3t",13:"EL3h（Secure Monitor，用 SP_ELx）"};
+const EC_D = {0x15:"SVC（AArch64 系统调用）",0x16:"HVC（虚拟化调用）",0x17:"SMC（安全监控调用）",0x3C:"BRK（软件断点）",0x00:"UNDEFINED（未定义指令）"};
+
+function F(h,l,n,o){ return Object.assign({h:h,l:l,n:n},o||{}); }
+function fldv(v,h,l){
+  if(v===null||v===undefined) return null;
+  return Math.floor(v/Math.pow(2,l))%Math.pow(2,h-l+1);
+}
+function fvstr(fv,w){
+  if(fv===null) return "·";
+  return w<=4 ? fv.toString(2).padStart(w,"0") : "0x"+fv.toString(16);
+}
+function bitrange(f){ return f.h===f.l ? String(f.h) : f.h+":"+f.l; }
+
+const SPSR_UPPER = [
+  F(63,36,"RES0",{res:1}),
+  F(35,32,"UINJ",{res:1,d:"架构扩展字段（FEAT_NMI 引入，本示例恒为 0）"}),
+  F(31,31,"N",{d:"条件标志：负（Negative）"}),
+  F(30,30,"Z",{d:"条件标志：零（Zero）"}),
+  F(29,29,"C",{d:"条件标志：进位/借位（Carry）"}),
+  F(28,28,"V",{d:"条件标志：有符号溢出（oVerflow）"})
+];
+const SPSR_LOW = [
+  F(27,25,"RES0",{res:1,d:"AArch64 下保留（Q / IT[1:0] 仅 AArch32 有效）"}),
+  F(24,24,"DIT",{d:"数据无关时间（FEAT_DIT）"}),
+  F(23,23,"UAO",{d:"未对齐访问覆盖（FEAT_UAO）"}),
+  F(22,22,"PAN",{d:"特权访问永不（FEAT_PAN）"}),
+  F(21,21,"SS",{d:"软件单步状态位（配合 MDSCR_EL1.SS）"}),
+  F(20,20,"IL",{d:"非法执行状态位（位宽组合非法时置位）"}),
+  F(19,13,"RES0",{res:1,d:"保留"}),
+  F(12,12,"SSBS",{d:"推测屏障抑制提示（FEAT_SSBS）"}),
+  F(11,10,"RES0",{res:1,d:"保留"}),
+  F(9,9,"D",{d:v=>v?"1：Debug 异常屏蔽":"0：Debug 异常开放"}),
+  F(8,8,"A",{d:v=>v?"1：SError 中止屏蔽":"0：SError 开放"}),
+  F(7,7,"I",{d:v=>v?"1：IRQ 屏蔽（异常入口自动置 1）":"0：IRQ 开放（允许中断）"}),
+  F(6,6,"F",{d:v=>v?"1：FIQ 屏蔽":"0：FIQ 开放"}),
+  F(5,4,"RES0",{res:1,d:"保留（T / M[4] 仅 AArch32 有效）"}),
+  F(3,0,"M",{d:v=>MODE_D[v]||"保留编码"})
+];
+const SPSR_ALT = [
+  F(27,27,"Q"),F(26,25,"IT[1:0]"),F(24,24,"DIT"),F(23,23,"SSBS"),F(22,22,"PAN"),F(21,21,"SS"),F(20,20,"IL"),
+  F(19,16,"GE"),F(15,10,"IT[7:2]"),F(9,9,"E"),F(8,8,"A"),F(7,7,"I"),F(6,6,"F"),F(5,5,"T"),F(4,4,"M[4]"),F(3,0,"M")
+];
+const ESR_ROW = [
+  F(63,32,"ISS2",{res:1,d:"ISS 扩展位（本示例恒为 0）"}),
+  F(31,26,"EC",{d:v=>EC_D[v]||"其他/未知类别"}),
+  F(25,25,"IL",{d:v=>v?"1：32 位指令触发（IL=1）":"0：（保留）"}),
+  F(24,0,"ISS",{d:(v,full)=>{
+    const ec = full===null?null:fldv(full,31,26);
+    if(ec===0x15||ec===0x16||ec===0x17||ec===0x3C) return "imm16 = 0x"+(v&0xFFFF).toString(16)+"（触发指令的立即数）";
+    if(ec===0x00) return "未定义指令编码相关位（本例 0）";
+    return "指令相关状态";
+  }})
+];
+const SCR_ROW = [
+  F(31,25,"RES0",{res:1}),
+  F(24,24,"NSE",{d:"RME 路由域选择（本例 0）"}),
+  F(23,15,"RES0",{res:1}),
+  F(14,14,"TWE",{d:"Trap WFE 到 EL3"}),
+  F(13,13,"TWI",{d:"Trap WFI 到 EL3"}),
+  F(12,12,"RES0",{res:1}),
+  F(11,11,"ST",{d:"Secure 自托管 trace 使能"}),
+  F(10,10,"RW",{d:v=>v?"1：下一级（EL2）为 AArch64":"0：下一级为 AArch32"}),
+  F(9,9,"RES0",{res:1}),
+  F(8,8,"HCE",{d:v=>v?"1：HVC 使能（EL0/EL1 可发 HVC）":"0：HVC 视为未定义"}),
+  F(7,7,"SMD",{d:v=>v?"1：SMC 禁用":"0：SMC 可用"}),
+  F(6,5,"RES0",{res:1,d:"保留（QEMU 复位默认置 1）"}),
+  F(4,4,"SIF",{d:v=>v?"1：Secure 态禁止非安全取指":"0：不限制取指"}),
+  F(3,3,"EA",{d:v=>v?"1：外部中止/SError 路由到 EL3":"0：按当前 EL 路由"}),
+  F(2,2,"FIQ",{d:v=>v?"1：FIQ 路由到 EL3":"0：按路由规则（本例送 EL1）"}),
+  F(1,1,"IRQ",{d:v=>v?"1：IRQ 路由到 EL3":"0：IRQ 送往 EL1（本例）"}),
+  F(0,0,"NS",{d:v=>v?"1：ERET 后进入 Non-secure 世界":"0：保持 Secure"})
+];
+const HCR_ROW = [
+  F(31,31,"RW",{d:v=>v?"1：EL1 为 AArch64":"0：EL1 为 AArch32"}),
+  F(30,30,"RES0",{res:1}),
+  F(29,29,"HCD",{d:v=>v?"1：HVC 禁用（视为未定义）":"0：HVC 可用（本例）"}),
+  F(28,28,"RES0",{res:1}),
+  F(27,27,"TGE",{d:v=>v?"1：一般异常 trap 到 EL2":"0：不 trap（本例）"}),
+  F(26,26,"TVM",{d:"Trap 虚拟内存控制寄存器到 EL2"}),
+  F(25,20,"RES0",{res:1}),
+  F(19,19,"TSC",{d:v=>v?"1：SMC trap 到 EL2":"0：SMC 直通 EL3（本例）"}),
+  F(18,15,"RES0",{res:1}),
+  F(14,14,"TWE",{d:"Trap WFE 到 EL2"}),
+  F(13,13,"TWI",{d:"Trap WFI 到 EL2"}),
+  F(12,5,"RES0",{res:1}),
+  F(4,4,"IMO",{d:v=>v?"1：IRQ 虚拟化/路由到 EL2":"0：物理路由（本例）"}),
+  F(3,3,"FMO",{d:v=>v?"1：FIQ 路由到 EL2":"0：物理路由"}),
+  F(2,1,"RES0",{res:1}),
+  F(0,0,"VM",{d:v=>v?"1：启用 EL1 虚拟化（stage-2）":"0：关闭（本例）"})
+];
+const SCTLR_ROW = [
+  F(31,26,"RES0",{res:1}),
+  F(25,25,"EE",{d:v=>v?"1：整体大端":"0：整体小端（本例）"}),
+  F(24,24,"E0E",{d:"EL0 数据端序（0=小端）"}),
+  F(23,20,"RES0",{res:1}),
+  F(19,19,"WXN",{d:v=>v?"1：可写区域不可执行":"0：不限制"}),
+  F(18,18,"nTWE",{d:v=>v?"1：WFE 不 trap（复位默认）":"0：WFE trap"}),
+  F(17,17,"RES0",{res:1}),
+  F(16,16,"nTWI",{d:v=>v?"1：WFI 不 trap（复位默认）":"0：WFI trap"}),
+  F(15,13,"RES0",{res:1}),
+  F(12,12,"I",{d:v=>v?"1：指令 cache 使能":"0：指令 cache 关闭"}),
+  F(11,6,"RES0",{res:1}),
+  F(5,5,"RES0",{res:1,d:"QEMU 复位默认置 1"}),
+  F(4,4,"SA0",{d:"EL0 SP 对齐检查"}),
+  F(3,3,"SA",{d:"SP 对齐检查（复位默认 1）"}),
+  F(2,2,"C",{d:"数据 cache 使能（本例 0）"}),
+  F(1,1,"A",{d:"对齐检查（本例 0）"}),
+  F(0,0,"M",{d:v=>v?"1：MMU 开启":"0：MMU 关闭（本例裸机直映射）"})
+];
+const CNTKCTL_ROW = [
+  F(31,10,"RES0",{res:1}),
+  F(9,9,"EL0PTEN",{d:v=>v?"1：允许 EL0 访问 EL1 物理定时器（cntp_*_el0）← 本示例关键":"0：EL0 访问定时器将 trap 到 EL1"}),
+  F(8,8,"EL0VTEN",{d:"允许 EL0 访问虚拟定时器"}),
+  F(7,4,"EVNTI",{d:"事件流触发计数值"}),
+  F(3,3,"EVNTDIR",{d:"事件流触发方向"}),
+  F(2,2,"EVNTEN",{d:"事件流使能"}),
+  F(1,1,"EL0VCTEN",{d:"允许 EL0 读虚拟计数器"}),
+  F(0,0,"EL0PCTEN",{d:"允许 EL0 读物理计数器 CNTPCT"})
+];
+const CNTPCTL_ROW = [
+  F(31,3,"RES0",{res:1}),
+  F(2,2,"ISTATUS",{d:v=>v?"1：定时器条件已满足，输出已断言（即将触发 IRQ）":"0：输出未断言"}),
+  F(1,1,"IMASK",{d:v=>v?"1：屏蔽定时器中断输出":"0：不屏蔽（本例）"}),
+  F(0,0,"ENABLE",{d:v=>v?"1：定时器使能，TVAL 开始递减":"0：定时器关闭"})
+];
+
+const BF = {};
+for(let el=1;el<=3;el++){
+  BF["spsr_el"+el] = {name:"SPSR_EL"+el, upper:SPSR_UPPER, low:SPSR_LOW, alt:SPSR_ALT, grid:true,
+    note:"异常进入时由硬件自动写入 PSTATE 快照；ERET 时整体恢复。M 决定返回后的 EL 与栈选择，DAIF 决定中断开关。"};
+  BF["esr_el"+el] = {name:"ESR_EL"+el, row:ESR_ROW,
+    note:"同步异常入口由硬件写入：EC=异常类别，IL=指令长度，ISS=具体信息（SVC/HVC/SMC/BRK 为 imm16）。"};
+}
+BF.scr_el3 = {name:"SCR_EL3", row:SCR_ROW, note:"bits[63:32] 恒为 0。QEMU 上 bit4/5 为复位默认 1，写入 0x501 读回 0x531。"};
+BF.hcr_el2 = {name:"HCR_EL2", row:HCR_ROW, note:"bits[63:32] 恒为 0。本例只设 RW=1，SMC/HVC 直通。"};
+BF.sctlr_el1 = {name:"SCTLR_EL1", row:SCTLR_ROW, note:"QEMU cortex-a53 复位值 0x00C50838，本示例只读（不用 MMU/cache）。"};
+BF.cntkctl_el1 = {name:"CNTKCTL_EL1", row:CNTKCTL_ROW, note:"bits[63:32] 恒为 0。"};
+BF.cntp_ctl = {name:"CNTP_CTL_EL0", row:CNTPCTL_ROW, note:"bits[63:3] 恒为 0。"};
+const BFPRIORITY = ["spsr_el3","spsr_el2","spsr_el1","esr_el3","esr_el2","esr_el1","scr_el3","hcr_el2","cntkctl_el1","cntp_ctl","sctlr_el1"];
+
+let bfCur = "spsr_el1", bfPre = null, bfChg = [];
+
+function cellCore(f, val, old, alt){
+  const w = f.h-f.l+1;
+  const fv = fldv(val, f.h, f.l);
+  const ov = (old===null||old===undefined) ? 0 : fldv(old, f.h, f.l);
+  const set = fv!==null && fv!==0;
+  const flip = fv!==null && fv!==ov;
+  const cls = "bcell"+(f.res?" res":"")+(set?" set":"")+(alt?" alt":"")+(flip?" flip":"");
+  return {cls:cls, fv:fv, w:w, set:set, flip:flip};
+}
+function fcell(f, val, old, alt){
+  const c = cellCore(f, val, old, alt);
+  const mw = Math.max(28, f.n.length*7+9);
+  return '<div class="'+c.cls+'" style="flex-grow:'+c.w+";min-width:"+mw+'px"><div class="bn">'+bitrange(f)+'</div><div class="bfn">'+f.n+'</div><div class="bv">'+fvstr(c.fv,c.w)+"</div></div>";
+}
+function gcell(f, val, old, alt){
+  const c = cellCore(f, val, old, alt);
+  return '<div class="'+c.cls+'" style="grid-column:span '+c.w+'"><div class="bn">'+bitrange(f)+'</div><div class="bfn">'+f.n+'</div><div class="bv">'+fvstr(c.fv,c.w)+"</div></div>";
+}
+function bfFields(def){ return def.grid ? def.upper.concat(def.low) : def.row; }
+function bitOwner(def, b){
+  for(const f of bfFields(def)){ if(b<=f.h && b>=f.l) return f.n; }
+  return "";
+}
+function renderBitfield(pre, changed){
+  bfPre = pre; bfChg = changed || [];
+  if($("bfauto").checked && bfChg.length){
+    for(const k of BFPRIORITY){ if(bfChg.includes(k)){ bfCur = k; break; } }
+    $("bfselect").value = bfCur;
+  }
+  const def = BF[bfCur];
+  if(!def) return;
+  const val = state[bfCur];
+  const old = (pre===null||pre===undefined) ? null : pre[bfCur];
+
+  $("bfvalue").innerHTML = '<span class="bfc">'+def.name+"</span> = "+(val===null?"—（尚未写入，继续单步观察）":hx16(val));
+
+  let chgTxt = "";
+  if(val!==null){
+    const ov = (old===null||old===undefined)?0:old;
+    const xs = [];
+    for(let b=0;b<32;b++){
+      if(((val>>>b)&1)!==((ov>>>b)&1)) xs.push("bit"+b+(bitOwner(def,b)?"("+bitOwner(def,b)+")":"")+": "+((ov>>>b)&1)+"→"+((val>>>b)&1));
+    }
+    chgTxt = xs.length ? "本步位变化："+xs.join(" · ") : (bfChg.includes(bfCur)?"本步重写了该寄存器（值未变）":"本步该寄存器无变化");
+  }
+  $("bfchg").textContent = chgTxt;
+
+  let h = "";
+  if(def.grid){
+    h += '<div class="bflbl">bits 63 … 28</div>';
+    h += '<div class="bfrow">'+def.upper.map(f=>fcell(f,val,old,false)).join("")+"</div>";
+    h += '<div class="bflbl">bits 27 … 0 —— AArch64 视图（本示例实际状态）</div>';
+    h += '<div class="bfgrid">'+def.low.map(f=>gcell(f,val,old,false)).join("")+"</div>";
+    h += '<div class="bflbl">bits 27 … 0 —— AArch32 视图（对照参考，本示例为 AArch64）</div>';
+    h += '<div class="bfgrid">'+def.alt.map(f=>gcell(f,val,old,true)).join("")+"</div>";
+  } else {
+    h += '<div class="bflbl">bits '+(def.row[0].h)+" … 0</div>";
+    h += '<div class="bfrow">'+def.row.map(f=>fcell(f,val,old,false)).join("")+"</div>";
+  }
+  $("bfwrap").innerHTML = h;
+
+  let dh = "";
+  if(val===null){
+    dh = '<div class="bde"><span class="m">该寄存器尚未被写入；单步到相关步骤时位图会自动出现。</span></div>';
+  } else {
+    for(const f of bfFields(def)){
+      const w = f.h-f.l+1;
+      const fv = fldv(val, f.h, f.l);
+      const ov = (old===null||old===undefined)?0:fldv(old, f.h, f.l);
+      if(f.res && fv===0) continue;
+      const chg = fv!==ov;
+      let m = "";
+      if(f.d){ m = (typeof f.d==="function") ? f.d(fv, val) : f.d; }
+      dh += '<div class="bde'+(chg?" chg":"")+'"><span class="n">'+f.n+'</span><span class="b">['+bitrange(f)+']</span><span class="v">= '+fvstr(fv,w)+'</span><span class="m">'+m+"</span></div>";
+    }
+    if(def.note) dh += '<div class="bde"><span class="m">'+def.note+"</span></div>";
+    if(def.alt) dh += '<div class="bde"><span class="m">第二行 AArch32 视图字段（Q、IT、GE、E、T、M[4]）仅 AArch32 状态有效，本示例恒为 0/无效，仅供对照。</span></div>';
+  }
+  $("bfdecode").innerHTML = dh;
+}
+
+function freshState(){
+  const st = {pc:A.start, el:3, mode:"EL3h", daif:15, secure:true, sp:0,
+    spEl0:null, spEl1:null, spEl2:null, spEl3:null,
+    scr_el3:0x30, vbar_el3:null, spsr_el3:null, elr_el3:null, esr_el3:null,
+    hcr_el2:null, vbar_el2:null, spsr_el2:null, elr_el2:null, esr_el2:null,
+    sctlr_el1:0xC50838, vbar_el1:null, cntkctl_el1:null, spsr_el1:null, elr_el1:null, esr_el1:null,
+    cntp_tval:null, cntp_ctl:null,
+    gicd_igroupr:null, gicd_ctlr:null, gicd_isenabler:null, gicc_ctlr:null, gicc_pmr:null, gicc_iar:null, gicc_eoir:null,
+    g_irq_ok:0};
+  for(let i=0;i<=30;i++) st["x"+i] = null;
+  st.x19 = 0;
+  return st;
+}
+
+function applyStep(st, s){
+  const changed = [];
+  for(const k in s.w){ if(st[k]!==s.w[k]){ st[k]=s.w[k]; changed.push(k); } }
+  if(s.to){
+    for(const k in s.to){ if(st[k]!==s.to[k]){ st[k]=s.to[k]; changed.push(k); } }
+  } else if(st.pc !== s.pc+4){
+    st.pc = s.pc+4; changed.push("pc");
+  }
+  return changed;
+}
+
+function hx16(v){ return v===null||v===undefined ? "—" : "0x"+(v>>>0).toString(16).padStart(8,"0").padStart(16,"0"); }
+function hx8(v){ return v===null||v===undefined ? "—" : "0x"+v.toString(16).padStart(8,"0"); }
+function modeOfSPSR(v){ const m=v&0xF; return {0:"EL0t",4:"EL0t",5:"EL1h",9:"EL2h",13:"EL3h"}[m]||"?"; }
+function esrDecode(v){
+  if(v===null||v===undefined) return "";
+  const ec=(v>>>26)&0x3F, il=(v>>>25)&1, imm=v&0xFFFF;
+  const names={0x15:"SVC",0x16:"HVC",0x17:"SMC",0x3C:"BRK",0x00:"UNDEFINED"};
+  return "EC=0x"+ec.toString(16)+(names[ec]?" ("+names[ec]+")":"")+"  IL="+il+"  imm=0x"+imm.toString(16);
+}
+function spsrDecode(v){
+  if(v===null||v===undefined) return "";
+  const nzcv=(v>>>28)&0xF, m=v&0xF, daif=(v>>>6)&0xF;
+  return modeOfSPSR(v)+" · NZCV=0b"+nzcv.toString(2).padStart(4,"0")+" · DAIF=0b"+daif.toString(2).padStart(4,"0");
+}
+
+const $ = id=>document.getElementById(id);
+let idx = 0, state = freshState(), playing = false, timer = null;
+
+function buildStatic(){
+  const xr = $("xregs");
+  let h = "";
+  for(let i=0;i<=30;i++){
+    if(i===19) continue;
+    h += '<div class="rrow" id="r-x'+i+'"><span class="n">X'+i+'</span><span class="v na">—</span></div>';
+  }
+  xr.innerHTML = h;
+
+  const sr = $("sysregs");
+  h = "";
+  for(const g of SYSGROUPS){
+    h += '<h3>'+g.t+'</h3><div class="reggrid">';
+    for(const r of g.regs){
+      if(BF[r[0]]){
+        h += '<div class="rrow bf" id="r-'+r[0]+'" data-bf="'+r[0]+'" title="点击查看位域图"><span class="n">'+r[1]+'</span><span class="v na">—</span></div>';
+      } else {
+        h += '<div class="rrow" id="r-'+r[0]+'" title=""><span class="n">'+r[1]+'</span><span class="v na">—</span></div>';
+      }
+    }
+    h += "</div>";
+  }
+  sr.innerHTML = h;
+  sr.addEventListener("click", e=>{
+    const r = e.target.closest(".rrow");
+    if(!r || !r.dataset.bf) return;
+    bfCur = r.dataset.bf;
+    $("bfselect").value = bfCur;
+    $("bfauto").checked = false;
+    renderBitfield(bfPre, bfChg);
+    $("bfpanel").scrollIntoView({behavior:"smooth", block:"nearest"});
+  });
+
+  const bs = $("bfselect");
+  h = "";
+  for(const k of BFPRIORITY) h += '<option value="'+k+'">'+BF[k].name+"</option>";
+  bs.innerHTML = h;
+  bs.value = bfCur;
+  bs.addEventListener("change", ()=>{
+    bfCur = bs.value;
+    $("bfauto").checked = false;
+    renderBitfield(bfPre, bfChg);
+  });
+
+  const vt = $("vt");
+  const groups = [
+    {t:"当前EL SP_EL0", base:0x000},
+    {t:"当前EL SP_ELx", base:0x200},
+    {t:"低EL AArch64", base:0x400},
+    {t:"低EL AArch32", base:0x600}
+  ];
+  const slots = [["0x000","同步","unexpected"],["0x080","IRQ","unexpected"],["0x100","FIQ","unexpected"],["0x180","SError","unexpected"],
+    ["0x200","同步","unexpected"],["0x280","IRQ","unexpected"],["0x300","FIQ","unexpected"],["0x380","SError","unexpected"],
+    ["0x400","同步","sync"],["0x480","IRQ","irq"],["0x500","FIQ","unexpected"],["0x580","SError","unexpected"],
+    ["0x600","同步","unexpected"],["0x680","IRQ","unexpected"],["0x700","FIQ","unexpected"],["0x780","SError","unexpected"]];
+  h = "";
+  let gi = 0;
+  for(const g of groups){
+    h += '<div class="grouph">'+g.t+"</div>";
+    for(let s=0;s<4;s++){
+      const cell = slots[gi];
+      const cls = "vcell"+(g.base===0x400?" hot":"");
+      h += '<div class="'+cls+'" data-vec="'+cell[0]+'"><span class="off">+'+cell[0]+'</span> <span class="ty">'+cell[1]+'</span><br><span class="hd">'+(cell[2]==="sync"?"lower_el_sync_handler":cell[2]==="irq"?"lower_el_irq_handler":"unexpected_handler")+"</span></div>";
+      gi++;
+    }
+  }
+  vt.innerHTML = h;
+
+  const ph = $("phases");
+  h = "";
+  PHASES.forEach((p,i)=>{ h += '<span class="chip" data-ph="'+i+'">'+p.name+"</span>"; });
+  ph.innerHTML = h;
+  ph.addEventListener("click", e=>{
+    const c = e.target.closest(".chip");
+    if(!c) return;
+    const want = +c.dataset.ph;
+    let t = 0;
+    for(let i=0;i<STEPS.length;i++) if(STEPS[i].ph===want){ t=i; break; }
+    pause(); gotoIdx(t);
+  });
+
+  const tr = $("trace");
+  h = "";
+  let lastPh = -1;
+  STEPS.forEach((s,i)=>{
+    if(s.ph!==lastPh){
+      lastPh = s.ph;
+      h += '<div class="phdr">'+PHASES[s.ph].name+' <small>'+PHASES[s.ph].hint+"</small></div>";
+    }
+    h += '<div class="trow'+(s.hw?" hw":"")+'" data-i="'+i+'"><span class="a">'+hx8(s.pc)+'</span><span class="c">'+s.code+"</span></div>";
+  });
+  tr.innerHTML = h;
+  tr.addEventListener("click", e=>{
+    const r = e.target.closest(".trow");
+    if(!r) return;
+    pause(); gotoIdx(+r.dataset.i);
+  });
+}
+
+function setVal(id, txt, chg, title){
+  const el = $(id);
+  if(!el) return;
+  const v = el.querySelector(".v");
+  v.textContent = txt;
+  v.classList.toggle("na", txt==="—");
+  el.classList.toggle("chg", !!chg);
+  if(title!==undefined) el.title = title;
+}
+
+function renderRegs(changed){
+  const ch = new Set(changed);
+  for(let i=0;i<=30;i++) setVal("r-x"+i, state["x"+i]===null?"—":hx16(state["x"+i]), ch.has("x"+i));
+  setVal("r-x19", hx16(state.x19), ch.has("x19"));
+  for(const g of SYSGROUPS){
+    for(const r of g.regs){
+      const k = r[0];
+      let title = "";
+      if(k.startsWith("esr")) title = esrDecode(state[k]);
+      if(k.startsWith("spsr")) title = spsrDecode(state[k]);
+      if(k==="scr_el3" && state[k]!==null) title = "NS(bit0)="+((state[k]>>0)&1)+" HCE(bit8)="+((state[k]>>8)&1)+" RW(bit10)="+((state[k]>>10)&1);
+      if(k==="hcr_el2" && state[k]!==null) title = "RW(bit31)="+((state[k]>>>31)&1);
+      if(k==="cntkctl_el1" && state[k]!==null) title = "EL0PTEN(bit9)="+((state[k]>>9)&1);
+      setVal("r-"+k, state[k]===null?"—":hx16(state[k]), ch.has(k), title);
+    }
+  }
+  setVal("r-sp", state.sp===null?"—":hx16(state.sp), ch.has("sp"));
+  setVal("r-spel0", state.spEl0===null?"—":hx16(state.spEl0), ch.has("spEl0"));
+  setVal("r-spel1", state.spEl1===null?"—":hx16(state.spEl1), ch.has("spEl1"));
+  setVal("r-spel2", state.spEl2===null?"—":hx16(state.spEl2), ch.has("spEl2"));
+  setVal("r-spel3", state.spEl3===null?"—":hx16(state.spEl3), ch.has("spEl3"));
+
+  $("v-pc").textContent = hx8(STEPS[idx].pc);
+  $("ts-pc").classList.toggle("chg", ch.has("pc"));
+  $("v-el").textContent = "EL"+state.el;
+  $("ts-el").classList.toggle("chg", ch.has("el"));
+  const d = state.daif;
+  $("daifl").innerHTML = ["D","A","I","F"].map((c,i)=>'<span class="'+(((d>>(3-i))&1)?"m":"")+'">'+c+"</span>").join(" ");
+  $("ts-daif").classList.toggle("chg", ch.has("daif"));
+}
+
+function renderEL(){
+  document.querySelectorAll(".elrow").forEach(r=>{
+    r.classList.toggle("on", +r.dataset.el===state.el);
+  });
+  $("sp0").textContent = "SP_EL0 "+(state.spEl0===null?"—":hx8(state.spEl0));
+  $("sp1").textContent = "SP_EL1 "+(state.spEl1===null?"—":hx8(state.spEl1));
+  $("sp2").textContent = "SP_EL2 "+(state.spEl2===null?"—":hx8(state.spEl2));
+  $("sp3").textContent = "SP_EL3 "+(state.spEl3===null?"—":hx8(state.spEl3));
+  const sec = $("secv");
+  sec.textContent = state.secure ? "Secure" : "Non-secure";
+  sec.classList.toggle("ns", !state.secure);
+  $("modev").textContent = state.mode;
+}
+
+function elBadge(ev){
+  if(!ev || (ev.kind!=="exc" && ev.kind!=="eret")) return;
+  const col = $("elcol");
+  const rows = col.querySelectorAll(".elrow");
+  const up = ev.kind==="exc";
+  const from = up?ev.from:ev.to, to = up?ev.to:ev.from;
+  const src = rows[3-from];
+  const dst = rows[3-to];
+  if(!src||!dst) return;
+  const b = document.createElement("div");
+  b.className = "tbadge "+(up?"up":"down");
+  b.textContent = (up?"▲ "+ev.cause+"：EL"+from+" → EL"+to : "▼ "+ev.cause+"：EL"+from+" → EL"+to);
+  const y = (src.offsetTop + dst.offsetTop)/2;
+  b.style.top = y+"px";
+  col.appendChild(b);
+  setTimeout(()=>b.remove(), 1400);
+}
+
+function flashVec(ev){
+  if(!ev || ev.kind!=="exc" || ev.vec===undefined) return;
+  const off = "0x"+ev.vec.toString(16);
+  const cell = document.querySelector('.vcell[data-vec="'+off+'"]');
+  if(!cell) return;
+  cell.classList.remove("hit");
+  void cell.offsetWidth;
+  cell.classList.add("hit");
+}
+
+const TAGCLS = {"[EL0]":"c-el0","[EL1]":"c-el1","[EL2]":"c-el2","[EL3]":"c-el3","[SYNC]":"c-sync","[ASYNC]":"c-async","[IRQ]":"c-irq","[OK]":"c-ok","[REG]":"c-reg","[RET]":"c-ret","[WARN]":"c-warn","[INFO]":"c-info"};
+
+function renderConsole(){
+  const c = $("console");
+  let h = "";
+  for(let i=0;i<=idx;i++){
+    for(const lg of STEPS[i].logs){
+      if(lg.k==="blank"){ h += '<div class="cl"></div>'; }
+      else if(lg.k==="banner"){ h += '<div class="cl banner">'+lg.t+"</div>"; }
+      else if(lg.k==="kv"){ h += '<div class="cl kv"><span class="kk">'+lg.key+":</span>"+lg.val+"</div>"; }
+      else if(lg.k==="step"){ h += '<div class="cl step">'+lg.t+"</div>"; }
+      else if(lg.k==="test"){ h += '<div class="cl test">'+lg.t+"</div>"; }
+      else if(lg.k==="ln"){ h += '<div class="cl"><span class="tag '+(TAGCLS[lg.tag]||"")+'">'+lg.tag+"</span>"+lg.t+"</div>"; }
+    }
+  }
+  c.innerHTML = h;
+  c.scrollTop = c.scrollHeight;
+}
+
+function renderDesc(changed){
+  const s = STEPS[idx];
+  $("dloc").textContent = s.loc + (s.hw?"  ·  硬件/隐含动作":"");
+  $("dcode").textContent = s.code;
+  $("descbox").classList.toggle("hwstep", !!s.hw);
+  $("ddesc").textContent = s.desc;
+  const parts = [];
+  for(const k in s.w){
+    if(k==="x30") continue;
+    parts.push(NAMEMAP[k]+" ← "+(k==="g_irq_ok"?String(s.w[k]):hx16(s.w[k])));
+  }
+  if(s.w.x30!==undefined) parts.push("X30(LR) ← "+hx8(s.w.x30));
+  if(s.to){
+    if(s.to.pc!==undefined) parts.push("PC ← "+hx8(s.to.pc));
+    if(s.to.el!==undefined) parts.push("PSTATE ← "+s.to.mode+"（EL"+s.to.el+"，DAIF="+(s.to.daif?"屏蔽":"开放")+"）");
+    if(s.to.sp!==undefined) parts.push("SP ← "+hx16(s.to.sp));
+    if(s.to.secure!==undefined) parts.push("安全状态 ← "+(s.to.secure?"Secure":"Non-secure"));
+  }
+  const w = $("writes");
+  if(parts.length){
+    w.innerHTML = "<div>本步效果：</div>"+parts.map(p=>"<div>  <b>"+p+"</b></div>").join("");
+    w.style.display = "block";
+  } else {
+    w.style.display = "none";
+  }
+}
+
+function renderTrace(){
+  const cur = document.querySelector('.trow[data-i="'+idx+'"]');
+  document.querySelectorAll(".trow.cur").forEach(r=>r.classList.remove("cur"));
+  if(cur){ cur.classList.add("cur"); cur.scrollIntoView({block:"nearest"}); }
+  document.querySelectorAll(".chip.cur").forEach(c=>c.classList.remove("cur"));
+  const chip = document.querySelector('.chip[data-ph="'+STEPS[idx].ph+'"]');
+  if(chip) chip.classList.add("cur");
+}
+
+function renderProg(){
+  $("prog").textContent = "步骤 "+(idx+1)+"/"+STEPS.length+" · "+PHASES[STEPS[idx].ph].name;
+  $("bprev").disabled = idx===0;
+  $("bnext").disabled = idx===STEPS.length-1;
+}
+
+function gotoIdx(i, animate){
+  idx = Math.max(0, Math.min(STEPS.length-1, i));
+  const st = freshState();
+  let changed = [], pre = null;
+  for(let j=0;j<=idx;j++){
+    if(j===idx){
+      pre = {};
+      for(const k in BF) pre[k] = st[k];
+      changed = applyStep(st, STEPS[j]);
+    } else {
+      applyStep(st, STEPS[j]);
+    }
+  }
+  state = st;
+  renderTrace();
+  renderRegs(changed);
+  renderEL();
+  renderDesc();
+  renderConsole();
+  renderProg();
+  renderBitfield(pre, changed);
+  if(animate!==false){
+    const ev = STEPS[idx].ev;
+    elBadge(ev);
+    flashVec(ev);
+  }
+}
+
+function step(){ if(idx<STEPS.length-1) gotoIdx(idx+1); else pause(); }
+function play(){
+  if(playing) return;
+  playing = true;
+  $("bplay").textContent = "暂停";
+  const tick = ()=>{
+    if(!playing) return;
+    step();
+    if(idx>=STEPS.length-1){ pause(); return; }
+    timer = setTimeout(tick, +$("speed").value);
+  };
+  tick();
+}
+function pause(){
+  playing = false;
+  clearTimeout(timer);
+  $("bplay").textContent = "自动运行";
+}
+
+$("bnext").addEventListener("click", ()=>{ pause(); step(); });
+$("bprev").addEventListener("click", ()=>{ pause(); gotoIdx(idx-1); });
+$("bplay").addEventListener("click", ()=>{ playing?pause():play(); });
+$("breset").addEventListener("click", ()=>{ pause(); gotoIdx(0); });
+document.addEventListener("keydown", e=>{
+  if(e.target.tagName==="SELECT") return;
+  if(e.code==="Space"){ e.preventDefault(); playing?pause():play(); }
+  else if(e.code==="ArrowRight"){ e.preventDefault(); pause(); step(); }
+  else if(e.code==="ArrowLeft"){ e.preventDefault(); pause(); gotoIdx(idx-1); }
+  else if(e.code==="KeyR"){ pause(); gotoIdx(0); }
+});
+
+buildStatic();
+gotoIdx(0);
+</script>
+</body>
+</html>
