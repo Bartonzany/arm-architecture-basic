@@ -338,7 +338,8 @@ function buildStatic(){
     h += '<div class="grouph">'+g.t+"</div>";
     for(let s=0;s<4;s++){
       const cell = slots[gi];
-      const cls = "vcell"+(g.base===0x400?" hot":"");
+      const enabled = (cell[2]==="sync" || cell[2]==="irq");
+      const cls = "vcell"+(g.base===0x400?" hot":"")+(enabled?" live":"");
       h += '<div class="'+cls+'" data-vec="'+cell[0]+'"><span class="off">+'+cell[0]+'</span> <span class="ty">'+cell[1]+'</span><br><span class="hd">'+(cell[2]==="sync"?"lower_el_sync_handler":cell[2]==="irq"?"lower_el_irq_handler":"unexpected_handler")+"</span></div>";
       gi++;
     }

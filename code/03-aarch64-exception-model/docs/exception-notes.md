@@ -208,6 +208,13 @@ while (!g_irq_ok) { /* 忙等 */ }
 
 **为什么**：定时器到期 → GIC 断言 IRQ → 硬件跳到 `VBAR_EL1+0x480`（更低 EL 的 IRQ 入口）。处理器读 `GICC_IAR` 得到中断 ID=30(0x1e)，写完 `GICC_EOIR` 结束。这印证 §6.3“异步、外部产生、随时打断”，以及 §7.7 的“IRQ 用 IAR/EOIR 识别与结束”。
 
+**关于 `while (!g_irq_ok)` 这句「忙等」**：
+
+- **不是停机，是自旋**：CPU 并没有停下来等，而是满速反复执行"读 `g_irq_ok` → 判断是否为 0 → 跳回循环开头"。程序被卡在循环里不往前推进，处理器照样烧时钟周期，这叫 busy-wait（忙等/自旋）。
+- **中断怎么打断空转**：定时器倒计时（`CNTP_TVAL_EL0 = 0x20000`）到点 → GIC 异步拉 IRQ → 硬件跳到 `VBAR_EL1 + 0x480` → `irq_handler_c` 关定时器、写 EOIR、把 `g_irq_ok = 1` → `eret` 回到循环，下一轮判断为假，循环才退出。
+- **为什么必须 `volatile`**：`g_irq_ok` 在 `main.c` 里声明为 `static volatile int`。若去掉 `volatile`，`-O2` 可能把它的读取提到循环外、只读一次，永远看不到 EL1 改的值，就会真死循环。
+- **和 `wfi` 的区别**：如果想让核真正空闲/低功耗地等中断，应改用 `wfi`（Wait For Interrupt）指令；本示例是纯自旋，没有用 `wfi`。
+
 ### 4.2 FIQ / SError / 虚拟中断
 
 **文段**（§6）：FIQ 与 IRQ 优先级相同；SError 报告系统错误；vIRQ/vFIQ/vSError 只能发信号给 EL1。
@@ -313,6 +320,28 @@ cmp     x0, #3                    // 判断从哪一级开始降，做健壮分�
 - `CurrentEL` 的异常级别编码在 **bits[3:2]**（`0b00`=EL0 … `0b11`=EL3），所以右移 2 位再掩 3。
 - 分支是为健壮：即便复位在 EL2 或 EL1，也能正确从那一级往下走（当前 QEMU 配置复位在 EL3）。
 
+#### 6.1.2.1 `start_el0`~`start_el3` 的地址是怎么算的
+
+`start_el3`/`start_el2`/`start_el1`/`start_el0` 都是 `.text.boot` 段里的**代码标签**，地址 = 段基址 + 段内偏移。段基址由链接脚本定为 `0x40000000`（`_start` 在此）；段内偏移由标签前面有多少条指令决定——AArch64 指令定长 4 字节，所以偏移必然是 4 的倍数。用 `objdump` 逐段数出来：
+
+| 标签 | 段内偏移 | 前面累计指令数 | 前面由谁贡献 | 最终地址 |
+| --- | --- | --- | --- | --- |
+| `_start` | 0x00 | 0 | — | 0x40000000 |
+| `start_el3` | 0x2c | 11 | `_start` 的读级/比较/分支 | 0x4000002c |
+| `start_el2` | 0x60 | 24 | 再加 `start_el3` 块 13 条 | 0x40000060 |
+| `start_el1` | 0x8c | 35 | 再加 `start_el2` 块 11 条 | 0x4000008c |
+| `start_el0` | 0xc0 | 48 | 再加 `start_el1` 块 13 条 | 0x400000c0 |
+
+各块长度 = 指令条数 × 4：
+
+```text
+_start     : 0x00–0x28  11 条 (0x2c = 44 字节) → start_el3 在 0x2c
+start_el3  : 0x2c–0x5c  13 条 (0x34 = 52 字节) → start_el2 在 0x60
+start_el2  : 0x60–0x88  11 条 (0x2c = 44 字节) → start_el1 在 0x8c
+start_el1  : 0x8c–0xbc  13 条 (0x34 = 52 字节) → start_el0 在 0xc0
+start_el0  : 0xc0        1 条  b main (4 字节)   → hang 在 0xc4
+```
+
 #### 6.1.3 `start_el3`（Secure 固件）
 
 ```asm
@@ -417,8 +446,6 @@ VBAR_EL1                    = 0x0000000040000800
 CPU 执行这条 b              -> PC = lower_el_sync_handler，进入处理代码
 ```
 
-对比 x86 的 IDT 更直观：x86 的门描述符里存的是处理函数地址，硬件查表拿到地址再跳；ARM64 的向量表是"代码槽"，硬件算好地址直接执行，槽里写什么指令就先执行什么。另外，`b` 是 ±128MB 的直接分支，处理函数在此范围内一跳即达；`b` 只占 4 字节，槽内其余到下一个 0x80 边界的空间由 `.balign 0x80` 填充（代码段通常填 NOP/0），真正"落地"的只有槽首那条 `b`。
-
 #### 6.2.2 `save_all` / `restore_all`
 
 ```asm
@@ -469,10 +496,17 @@ eret
 
 > **关于标签写法**：`b.eq 1f` 里的 `1f` 是 GNU 汇编的**局部标签**——`1f`=向前（forward）找最近的 `1:` 标签，数字只是"标签名字"（局部标签可用 0~9），不是顺序编号。所以上面 `1:` 标 EL3、`2:` 标 EL2、`3:` 是汇合点，编号和物理顺序不一致完全正常。这样编排是刻意为之：**EL1 是最常走的热路径**（SVC/BRK/UDF 都从 EL0 降到 EL1），放在 `b.eq` 之后的顺序位置（fall-through，省一次跳转）；EL2（HVC）/EL3（SMC）只在链条里偶尔走一次，用 `1f`/`2f` 跳过去。三个标签的物理排列是"EL1(顺序) → EL2(`2:`) → EL3(`1:`) → 汇合(`3:`)"。
 
-这段体现了两件架构事实：
+这段体现了三点架构事实：
 
 1. **硬件自动填好了三个寄存器**：进入异常时，硬件已把 PSTATE→`SPSR_ELx`、返回地址→`ELR_ELx`、原因→`ESR_ELx`，这里只是把它们读出来交给 C 打印/分派。
-2. **ELR 的语义因异常类型而异**：SVC/HVC/SMC 的 ELR 指向"下一条指令"，直接 eret 即继续；但 BRK/UDF 的 ELR 指向"触发指令本身"，若直接 eret 会死循环，所以 `dispatch_sync` 返回 1，汇编把 ELR_ELx +4 跳过该指令。
+2. **ELR 的语义因异常类型而异**，同步异常写进 `ELR_ELx` 的"返回地址"有两种语义：
+   - SVC/HVC/SMC 这类主动陷入的，ELR 指向触发指令的**下一条**（PC+4），直接 `eret` 就能继续。
+   - BRK/UDF 这类断点/非法指令，ELR 指向**触发指令自身**，直接 `eret` 会回到同一条再触发异常，形成死循环。
+
+   所以对 BRK/UDF，`dispatch_sync` 返回 `skip=1`，汇编把 `ELR_ELx` 加 4（A64 指令定长 4 字节，正好是下一条）再 `eret`，从而越过这条故障指令。例如 EL0 在 `0x400020e0` 执行 `udf #0`，硬件把 `ELR_EL1` 置成这个地址本身，不 +4 就会反复执行它。
+
+   abort 类异常同样把 ELR 指向自身，但通常要"重试"而非"跳过"（如缺页处理完应重新执行那条访存指令），所以本示例只对 BRK/UDF 真正做 `ELR+4`。
+
 3. **"读"和"改"是两回事**：前面 `mrs x1/x2/x3` 只是把 ESR/ELR/SPSR **读出来打印**，不改任何东西；后面 `mrs…add…msr elr_elx` 才是真正**修改返回地址**（+4 跳过触发指令，A64 一条指令 4 字节）。写回哪个 `ELR_ELx` 取决于当前级别（eret 从当前级别返回，用的就是该级 ELR_ELx），所以又按 x19 判断了一次——这就是"打印读一遍、改地址又按级别写一遍"的原因。
 
 ### 6.3 main.c —— 日志框架 + 异常分发 + 演示主流程
@@ -576,6 +610,47 @@ SECTIONS {
 
 - `.text.boot` 在最前、`.text.vector` 紧随其后，保证 `_start` 在 0x40000000、向量表在其后 0x800 对齐处（所以输出里 `VBAR=0x40000800`）。
 - 给四个异常级别各留 4KB 独立栈（`_stack_top_el3/2/1/0` 依次递增、互不重叠），对应 boot.S 里每级 `mov sp` / `msr sp_el0` 取用的栈顶。
+
+#### 6.4.1 各段大小是怎么来的
+
+`linker.ld` 并不"计算"大小，它只做三件事：用通配把各 `.o` 里的**输入段**装进**输出段**、按声明顺序排列、按对齐要求补 padding。所以**输出段大小 = 装入的各输入段大小之和 + 对齐填充**；用 `aarch64-linux-gnu-objdump -h ../../build/bare-metal/*.o` 能看到每个输入段的原始大小。
+
+| 输出段 | 由哪些输入段组成 | 实测大小 |
+| --- | --- | --- |
+| `.text` | boot.o `.text.boot` 0x110 + vector_table.o `.text.vector` 0x95c + main.o `.text` 0xf9c + `.text.startup` 0x118，再加对齐填充 0x6f0+0x4+0x4 | 0x2218 |
+| `.rodata` | main.o `.rodata.str1.8` 0x99e + `.rodata` 0x260，加对齐 0x2 | 0x0c00 |
+| `.eh_frame` | main.o `.eh_frame`（C 代码栈回溯表；`linker.ld` 未声明，链接器把它当孤儿段默认排在 `.rodata` 后） | 0x0258 |
+| `.bss` | main.o `.bss`（就是 `g_irq_ok`） | 0x0004 |
+
+`.text.vector` 带 `.balign 0x800`，对齐要求是 2**11，链接器就在 `.text.boot`（0x110）后面补 0x6f0，让向量表正好落到 `0x40000800`——这就是输出里 `VBAR=0x40000800` 的由来。`.text` 段内部的排布：
+
+```text
+0x40000000  .text.boot      0x110
+0x40000110  padding         0x6f0   (把 .text.vector 对齐到 0x800)
+0x40000800  .text.vector    0x95c   (vector_table 在此)
+0x4000115c  padding         0x004   (main.o .text 需 16 字节对齐)
+0x40001160  main.o .text    0xf9c
+0x400020fc  padding         0x004   (.text.startup 需 16 字节对齐)
+0x40002100  .text.startup   0x118   (main 在此)
+0x40002218  .text 结束
+```
+
+把这些段首尾相接、再补齐对齐，就得到整幅内存布局图（只有每个 0x1000 的栈是 `linker.ld` 里显式写死的，其余大小都来自编译产物）：
+
+```text
+0x40007080  _stack_top_el0   ← EL0 栈顶（[0x40006080, 0x40007080)）
+0x40006080  _stack_top_el1   ← EL1 栈顶（[0x40005080, 0x40006080)）
+0x40005080  _stack_top_el2   ← EL2 栈顶（[0x40004080, 0x40005080)）
+0x40004080  _stack_top_el3   ← EL3 栈顶 = SP_EL3 初值（[0x40003080, 0x40004080)）
+0x40003080  ALIGN(16) 后的镜像末尾（.bss 到 0x40003074，补 12 字节）
+0x40003070  .bss        0x004  g_irq_ok
+0x40002e18  .eh_frame   0x258  main.o 栈回溯表
+0x40002218  .rodata     0xc00  字符串/常量
+0x40000000  .text       0x2218 .text.boot + .text.vector + 各 .text*
+            （地址自上而下递减，最上面一行地址最高）
+```
+
+所以 `_stack_top_el3 = 0x40003080 + 0x1000 = 0x40004080`，它是 EL3 那片 4KB 栈 `[0x40003080, 0x40004080)` 的高地址一端（栈向下增长，空栈时 SP 指向栈顶）；`boot.S` 里 `ldr x2, =_stack_top_el3; mov sp, x2` 因而把 0x40004080 同时送进 x2 和 SP_EL3。
 
 ---
 
